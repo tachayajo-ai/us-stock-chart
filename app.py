@@ -388,6 +388,9 @@ with tab_buffett:
 
         summary = st.container()
         with st.expander("⚙️ สมมติฐานมูลค่าที่แท้จริง (DCF) — ปรับได้", expanded=False):
+            if extra.get("financial"):
+                st.info("หุ้นกลุ่มการเงิน (ธนาคาร ประกัน บริษัทจัดการกองทุน) ไม่คำนวณ DCF จากกระแสเงินสด "
+                        "เพราะเงินสดของลูกค้าปนอยู่ในงบ ตัวเลขจะสูงเกินจริงมาก · ควรดู P/B และ ROE แทน")
             options = dcf_options(extra)
             basis = st.radio("ฐานกระแสเงินสด", options, horizontal=True, key=f"basis_{b_ticker}")
             base = extra.get("oe_base" if basis == BASIS_OE else "fcf_base")
@@ -420,8 +423,14 @@ with tab_buffett:
             m1.metric("คะแนน Buffett", f"{passed}/{applicable}",
                       help="นับเฉพาะข้อที่ประเมินได้ (ไม่รวม N/A)")
             m2.metric("ราคาปัจจุบัน", f"${price:,.2f}" if price else "—")
-            m3.metric("มูลค่าที่แท้จริง (DCF)", f"${iv:,.2f}" if iv else "—")
-            m4.metric("Margin of safety", f"{mos:+.0%}" if mos is not None else "—")
+            if extra.get("financial"):
+                pb, roe_i = info.get("priceToBook"), info.get("returnOnEquity")
+                m3.metric("P/B (ราคา ÷ มูลค่าทางบัญชี)", f"{pb:.2f} เท่า" if pb else "—",
+                          help="กลุ่มการเงินใช้ P/B แทน DCF · ยิ่งต่ำยิ่งถูก เทียบกับ ROE ประกอบ")
+                m4.metric("ROE ล่าสุด", f"{roe_i:.1%}" if roe_i is not None else "—")
+            else:
+                m3.metric("มูลค่าที่แท้จริง (DCF)", f"${iv:,.2f}" if iv else "—")
+                m4.metric("Margin of safety", f"{mos:+.0%}" if mos is not None else "—")
             score = passed / applicable if applicable else 0
             verdict = ("🟢 เข้าเกณฑ์ธุรกิจแบบ Buffett" if score >= 0.75 else
                        "🟡 ผ่านบางส่วน — ดูข้อที่ไม่ผ่านประกอบ" if score >= 0.5 else
@@ -539,7 +548,8 @@ with tab_screener:
     else:
         sc = load_screener(SCREENER_FILE.stat().st_mtime)
         st.caption(f"อัปเดตล่าสุด {sc['updated'].iloc[0]} · {len(sc)} บริษัท · คำนวณใหม่อัตโนมัติทุกวันเสาร์ · "
-                   "DCF ใช้ค่าเริ่มต้น (discount 10%, terminal 2.5%, growth = CAGR ในอดีต จำกัด 0–15%)")
+                   "DCF ใช้ค่าเริ่มต้น (discount 10%, terminal 2.5%, growth = CAGR ในอดีต จำกัด 0–15%) · "
+                   "กลุ่ม Financials ไม่คำนวณ DCF/MOS ให้ดู P/B แทน")
 
         c1, c2, c3 = st.columns([1.2, 1.2, 2])
         min_score = c1.slider("คะแนนขั้นต่ำ (% ข้อที่ผ่าน)", 0, 100, 70, 5, key="sc_min")
@@ -551,7 +561,8 @@ with tab_screener:
 
         view = sc[sc["score_pct"] * 100 >= min_score]
         if min_mos > -100:  # ซ้ายสุด = ไม่กรอง MOS (รวมตัวที่คำนวณ DCF ไม่ได้)
-            view = view[view["margin_of_safety"].fillna(-9) * 100 >= min_mos]
+            view = view[(view["margin_of_safety"].fillna(-9) * 100 >= min_mos)
+                        | (view["sector"] == "Financials")]  # การเงินไม่มี MOS ไม่ตัดออก
         if pick_sec:
             view = view[view["sector"].isin(pick_sec)]
         if query:
@@ -564,8 +575,10 @@ with tab_screener:
         show = view.copy()
         show[pct_cols] = show[pct_cols] * 100
         show["score_txt"] = show["score"].astype(int).astype(str) + "/" + show["applicable"].astype(int).astype(str)
+        if "price_to_book" not in show.columns:
+            show["price_to_book"] = None
         show = show[["ticker", "name", "sector", "score_txt", "score_pct", "price", "intrinsic_value",
-                     "margin_of_safety", "oe_yield", "roe", "gross_margin", "net_margin", "debt_years", "failed"]]
+                     "margin_of_safety", "price_to_book", "oe_yield", "roe", "gross_margin", "net_margin", "debt_years", "failed"]]
         st.dataframe(
             show, hide_index=True, width="stretch", height=480,
             column_config={
@@ -577,6 +590,7 @@ with tab_screener:
                 "price": st.column_config.NumberColumn("ราคา", format="$%.2f"),
                 "intrinsic_value": st.column_config.NumberColumn("มูลค่า DCF", format="$%.2f"),
                 "margin_of_safety": st.column_config.NumberColumn("MOS", format="%.0f%%"),
+                "price_to_book": st.column_config.NumberColumn("P/B", format="%.2f"),
                 "oe_yield": st.column_config.NumberColumn("OE yield", format="%.1f%%"),
                 "roe": st.column_config.NumberColumn("ROE", format="%.0f%%"),
                 "gross_margin": st.column_config.NumberColumn("Gross M.", format="%.0f%%"),

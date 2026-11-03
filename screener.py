@@ -15,7 +15,7 @@ import requests
 import yfinance as yf
 
 from buffett import (buffett_checks, current_price, dcf_options, default_growth, fetch_fundamentals,
-                     is_company, valuation_rows)
+                     is_company, is_financial, valuation_rows)
 
 OUT = Path(__file__).with_name("screener.csv")
 UA = {"User-Agent": "Mozilla/5.0 (us-stock-chart screener)"}
@@ -52,7 +52,7 @@ def screen_one(ticker: str, name: str, sector: str, tnx) -> dict | None:
     f = fetch_with_retry(ticker)
     if f is None or not is_company(f):
         return None
-    checks, extra = buffett_checks(f)
+    checks, extra = buffett_checks(f, financial=is_financial(f["info"], sector))
     info = f["info"]
     price, shares = current_price(info), info.get("sharesOutstanding")
     basis = dcf_options(extra)[0]
@@ -67,6 +67,7 @@ def screen_one(ticker: str, name: str, sector: str, tnx) -> dict | None:
         "score": passed, "applicable": applicable,
         "score_pct": passed / applicable if applicable else None,
         "price": price, "intrinsic_value": iv, "margin_of_safety": mos,
+        "price_to_book": info.get("priceToBook"),
         "oe_yield": oe_y, "roe": m.get("roe"), "gross_margin": m.get("gross_margin"),
         "net_margin": m.get("net_margin"), "debt_years": m.get("debt_years"),
         "capex_to_ni": m.get("capex_to_ni"), "share_change": m.get("share_change"),

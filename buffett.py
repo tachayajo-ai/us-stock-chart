@@ -84,7 +84,18 @@ def owner_earnings(f: dict) -> pd.DataFrame | None:
     return df
 
 
-def buffett_checks(f: dict) -> tuple[list[dict], dict]:
+FIN_NOTE = "ไม่ใช้กับธุรกิจการเงิน"
+FIN_WHY = ("ธนาคาร/ประกัน/บริษัทการเงิน: กระแสเงินสดรวมเงินฝาก เบี้ยประกัน และเงินลงทุนของลูกค้า "
+           "จึงไม่ใช่เงินที่เจ้าของดึงออกได้จริง")
+
+
+def is_financial(info: dict, sector: str | None = None) -> bool:
+    """Yahoo ใช้ 'Financial Services' · GICS (Wikipedia) ใช้ 'Financials'"""
+    names = {str(info.get("sector", "")).strip().lower(), str(sector or "").strip().lower()}
+    return bool(names & {"financial services", "financials"})
+
+
+def buffett_checks(f: dict, financial: bool | None = None) -> tuple[list[dict], dict]:
     inc, bal, cf = f["inc"], f["bal"], f["cf"]
     ni = _col(inc, "Net Income", "Net Income Common Stockholders")
     rev = _col(inc, "Total Revenue", "Operating Revenue")
@@ -219,6 +230,16 @@ def buffett_checks(f: dict) -> tuple[list[dict], dict]:
                      "ผล": "✅ ผ่าน" if (o > 0).all() else "❌ ไม่ผ่าน",
                      "ทำไมสำคัญ": "เงินที่เจ้าของดึงออกได้จริงโดยธุรกิจไม่เสียความสามารถในการแข่งขัน",
                      "_s": "pass" if (o > 0).all() else "fail"})
+
+    # ธุรกิจการเงิน: FCF / Capex / Owner earnings / DCF ไม่มีความหมาย -> N/A ไม่นับคะแนน
+    if financial is None:
+        financial = is_financial(f["info"])
+    extra["financial"] = financial
+    if financial:
+        for r in rows:
+            if r["หลักเกณฑ์"] in ("Free cash flow เป็นบวกทุกปี", "Capex / กำไรสุทธิ", "Owner earnings เป็นบวกทุกปี"):
+                r.update({"ค่าจริง": f"{FIN_NOTE} ({r['ค่าจริง']})", "ผล": "➖ N/A", "ทำไมสำคัญ": FIN_WHY, "_s": "na"})
+        m.pop("capex_to_ni", None)
     return rows, extra
 
 
@@ -247,6 +268,11 @@ def default_growth(extra: dict, basis: str) -> float:
 def valuation_rows(extra: dict, price, shares_out, basis: str, g: float, dr: float, tg: float, tnx):
     """แถว Margin of safety + Owner earnings yield · คืน (rows, iv, mos, oe_y)"""
     rows = []
+    if extra.get("financial"):
+        rows.append({"หลักเกณฑ์": "ราคาต่ำกว่ามูลค่าที่แท้จริง", "เกณฑ์ผ่าน": "Margin of safety ≥ 25%",
+                     "ค่าจริง": f"{FIN_NOTE} — ใช้ P/B, ROE และคุณภาพสินเชื่อ/การรับประกันแทน",
+                     "ผล": "➖ N/A", "ทำไมสำคัญ": FIN_WHY, "_s": "na"})
+        return rows, None, None, None
     base = extra.get("oe_base" if basis == BASIS_OE else "fcf_base")
     iv = None
     if base and base > 0 and shares_out and dr > tg:
