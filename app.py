@@ -15,7 +15,8 @@ import streamlit as st
 import yfinance as yf
 
 from buffett import (BASIS_OE, buffett_checks, current_price, dcf_options, default_growth,
-                     fetch_fundamentals, fmt_money, is_company, valuation_rows)
+                     fetch_fundamentals, fmt_money, is_company, price_to_book, share_count,
+                     valuation_rows)
 
 WATCHLIST_FILE = Path(__file__).with_name("watchlist.json")
 DEFAULT_WATCHLIST = ["SPY", "QQQ", "VOO", "AAPL", "MSFT", "NVDA", "TSLA", "SCHD", "BRK-B"]
@@ -384,7 +385,7 @@ with tab_buffett:
     else:
         rows, extra = buffett_checks(f)
         price = current_price(info) or get_quote(b_ticker).get("close")
-        shares_out = info.get("sharesOutstanding")
+        shares_out = share_count(info, price)
 
         summary = st.container()
         with st.expander("⚙️ สมมติฐานมูลค่าที่แท้จริง (DCF) — ปรับได้", expanded=False):
@@ -424,7 +425,7 @@ with tab_buffett:
                       help="นับเฉพาะข้อที่ประเมินได้ (ไม่รวม N/A)")
             m2.metric("ราคาปัจจุบัน", f"${price:,.2f}" if price else "—")
             if extra.get("financial"):
-                pb, roe_i = info.get("priceToBook"), info.get("returnOnEquity")
+                pb, roe_i = price_to_book(f), info.get("returnOnEquity")
                 m3.metric("P/B (ราคา ÷ มูลค่าทางบัญชี)", f"{pb:.2f} เท่า" if pb else "—",
                           help="กลุ่มการเงินใช้ P/B แทน DCF · ยิ่งต่ำยิ่งถูก เทียบกับ ROE ประกอบ")
                 m4.metric("ROE ล่าสุด", f"{roe_i:.1%}" if roe_i is not None else "—")

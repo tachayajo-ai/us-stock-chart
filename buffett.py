@@ -310,3 +310,24 @@ def is_company(f: dict) -> bool:
 
 def current_price(info: dict):
     return info.get("currentPrice") or info.get("regularMarketPrice")
+
+
+def share_count(info: dict, price):
+    """จำนวนหุ้นเทียบเท่าทั้งบริษัท = มูลค่าตลาดรวม ÷ ราคา
+    แก้ปัญหาหุ้นหลาย class (BRK-B, GOOGL) ที่ Yahoo ให้ sharesOutstanding เฉพาะ class เดียว"""
+    mc = info.get("marketCap")
+    if mc and price:
+        return mc / price
+    return info.get("impliedSharesOutstanding") or info.get("sharesOutstanding")
+
+
+def price_to_book(f: dict):
+    """P/B = มูลค่าตลาดรวม ÷ ส่วนของผู้ถือหุ้น (งบปีล่าสุด)
+    ไม่ใช้ priceToBook ของ Yahoo ตรงๆ เพราะหุ้นหลาย class คำนวณผิด (เช่น BRK-B ได้ 0.001)"""
+    info = f["info"]
+    eq = _col(f["bal"], "Stockholders Equity", "Common Stock Equity")
+    mc = info.get("marketCap")
+    if eq is not None and mc:
+        return mc / float(eq.iloc[-1]) if eq.iloc[-1] > 0 else None
+    pb = info.get("priceToBook")
+    return pb if pb and pb >= 0.05 else None
