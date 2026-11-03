@@ -16,12 +16,13 @@ import streamlit as st
 import yfinance as yf
 
 # Streamlit Cloud อัปเดต app.py แต่ไม่โหลด buffett.py ใหม่ -> บังคับโหลดใหม่ กัน ImportError หลังอัปเดตไฟล์
-for _mod in ("buffett", "guides", "company", "alerts"):
+for _mod in ("buffett", "guides", "company", "alerts", "portfolio"):
     if _mod in sys.modules:
         importlib.reload(sys.modules[_mod])
 import guides  # noqa: E402
 from company import earnings_links, fetch_earnings, fetch_news, translate, translate_lines  # noqa: E402
 import alerts as alerts_mod  # noqa: E402
+import portfolio as pf  # noqa: E402
 from buffett import (BASIS_OE, buffett_checks, build_buffett_indicator, current_price, dcf_options, default_growth,
                      implied_growth,
                      fetch_fundamentals, fmt_money, is_company, price_to_book, share_count,
@@ -245,8 +246,9 @@ if not wl:
 if st.session_state.get("selected") not in wl:
     st.session_state.selected = wl[0]
 
-tab_chart, tab_overview, tab_compare, tab_company, tab_buffett, tab_screener, tab_alerts = st.tabs(
-    ["📈 กราฟ", "📋 ภาพรวม", "⚖️ เปรียบเทียบ", "🏢 บริษัท", "🎩 Buffett", "🔍 Screener", "🔔 แจ้งเตือน"])
+(tab_chart, tab_overview, tab_compare, tab_company, tab_buffett, tab_screener, tab_alerts, tab_port,
+ tab_manual) = st.tabs(["📈 กราฟ", "📋 ภาพรวม", "⚖️ เปรียบเทียบ", "🏢 บริษัท", "🎩 Buffett", "🔍 Screener",
+                        "🔔 แจ้งเตือน", "💼 พอร์ต", "📖 คู่มือ"])
 
 # ---------------- tab: chart ----------------
 with tab_chart:
@@ -1053,4 +1055,271 @@ with tab_alerts:
 
     with st.expander("📘 วิธีตั้งค่าแอพ ntfy และใช้การแจ้งเตือนให้ได้ผล"):
         st.markdown(guides.ALERTS)
+
+
+# ================= พอร์ต =================
+PORT_FILE = "portfolio.enc.json"
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def history_since(ticker: str, start: str) -> pd.DataFrame:
+    """ราคาปิดรายวัน + ปันผล ตั้งแต่วันที่ start"""
+    df = yf.Ticker(ticker).history(start=start, auto_adjust=False)
+    if not df.empty and df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    return df
+
+
+def close_on(ticker: str, d) -> float | None:
+    try:
+        h = history_since(ticker, (pd.Timestamp(d) - pd.Timedelta(days=10)).strftime("%Y-%m-%d"))
+    except Exception:
+        return None
+    if h.empty:
+        return None
+    h = h[h.index <= pd.Timestamp(d) + pd.Timedelta(hours=23)]
+    return float(h["Close"].iloc[-1]) if not h.empty else None
+
+
+def save_portfolio() -> bool:
+    return write_repo_json(PORT_FILE, pf.encrypt(st.session_state.port_txs, st.session_state.port_pw),
+                           "Update portfolio (encrypted)")
+
+
+with tab_port:
+    st.markdown("### 💼 พอร์ตของฉัน")
+    if "port_txs" not in st.session_state:
+        blob = read_repo_json(PORT_FILE)
+        if not (isinstance(blob, dict) and {"salt", "data"} <= blob.keys()):
+            blob = None
+        st.caption("🔒 ข้อมูลพอร์ตเข้ารหัสด้วยรหัสผ่านของคุณ — ไฟล์บน GitHub อ่านไม่ออก และคนที่มีลิงก์แอพเปิดแท็บนี้ไม่ได้")
+        if blob is None:
+            st.info("ยังไม่มีพอร์ต — ตั้งรหัสผ่านเพื่อสร้างพอร์ตใหม่")
+            p1 = st.text_input("ตั้งรหัสผ่าน (อย่างน้อย 6 ตัว)", type="password", key="port_new_pw")
+            p2 = st.text_input("ยืนยันรหัสผ่าน", type="password", key="port_new_pw2")
+            st.warning("⚠️ จดรหัสผ่านไว้ให้ดี — ถ้าลืม จะเปิดข้อมูลพอร์ตไม่ได้อีก (ไม่มีใครกู้ให้ได้ รวมถึงผู้พัฒนา)")
+            if st.button("สร้างพอร์ต", key="port_create", disabled=not p1):
+                if len(p1) < 6:
+                    st.error("รหัสผ่านสั้นเกินไป")
+                elif p1 != p2:
+                    st.error("รหัสผ่านสองช่องไม่ตรงกัน")
+                else:
+                    st.session_state.port_txs, st.session_state.port_pw = [], p1
+                    if save_portfolio():
+                        st.rerun()
+        else:
+            pw = st.text_input("รหัสผ่านพอร์ต", type="password", key="port_pw_in")
+            if st.button("🔓 เปิดพอร์ต", key="port_unlock", disabled=not pw):
+                try:
+                    st.session_state.port_txs = pf.decrypt(blob, pw)
+                    st.session_state.port_pw = pw
+                    st.rerun()
+                except ValueError as e:
+                    st.error(str(e))
+    else:
+        txs = st.session_state.port_txs
+        top_l, top_r = st.columns([4, 1])
+        top_l.caption("🔒 เปิดพอร์ตอยู่ — ปิดแท็บเบราว์เซอร์หรือกดล็อกเมื่อใช้เสร็จ")
+        if top_r.button("🔒 ล็อก", key="port_lock"):
+            for k in ("port_txs", "port_pw"):
+                st.session_state.pop(k, None)
+            st.rerun()
+
+        pos, realized = pf.compute_positions(txs)
+        held = {k: v for k, v in pos.items() if v["shares"] > 0}
+        tickers = sorted(pos)
+        hist, prices, prev = {}, {}, {}
+        if tickers:
+            start = min(t["date"] for t in txs)
+            with st.spinner("กำลังโหลดราคา…"):
+                for tk in tickers:
+                    try:
+                        hist[tk] = history_since(tk, start)
+                    except Exception:
+                        hist[tk] = pd.DataFrame()
+                    prices[tk] = last_price(tk) or (float(hist[tk]["Close"].iloc[-1]) if not hist[tk].empty else None)
+                    if not hist[tk].empty and len(hist[tk]) >= 2:
+                        prev[tk] = float(hist[tk]["Close"].iloc[-2])
+        wht = st.toggle("หักภาษีปันผล 15% (นักลงทุนไทย)", value=True, key="port_wht",
+                        help="สหรัฐหักภาษีปันผล 15% สำหรับผู้มีถิ่นที่อยู่ในไทย (อนุสัญญาภาษีซ้อน)")
+        divs = pf.dividends_received(txs, {tk: h["Dividends"] for tk, h in hist.items()
+                                           if not h.empty and "Dividends" in h.columns},
+                                     0.15 if wht else 0.0)
+        div_by = divs.groupby("ticker")["net"].sum() if not divs.empty else pd.Series(dtype=float)
+
+        value = sum(v["shares"] * (prices.get(k) or 0) for k, v in held.items())
+        cost = sum(v["cost"] for v in held.values())
+        unreal = value - cost
+        real_total = sum(realized.values())
+        div_total = float(div_by.sum()) if len(div_by) else 0.0
+        day_chg = sum(v["shares"] * ((prices.get(k) or 0) - prev.get(k, prices.get(k) or 0)) for k, v in held.items())
+        thb = last_price("THB=X")
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("มูลค่าพอร์ต", f"${value:,.2f}", f"{day_chg:+,.2f} วันนี้", delta_color="normal",
+                  help=f"≈ ฿{value * thb:,.0f} ที่อัตรา {thb:.2f} บาท/ดอลลาร์" if thb else None)
+        m2.metric("กำไร/ขาดทุน (ยังไม่ขาย)", f"${unreal:+,.2f}", f"{unreal / cost:+.1%}" if cost else None)
+        m3.metric("กำไรที่ขายแล้ว", f"${real_total:+,.2f}")
+        m4.metric("ปันผลรับ (ประมาณ)", f"${div_total:,.2f}")
+        if thb and value:
+            st.caption(f"มูลค่าพอร์ต ≈ **฿{value * thb:,.0f}** · ผลตอบแทนรวม (ยังไม่ขาย + ขายแล้ว + ปันผล) "
+                       f"**${unreal + real_total + div_total:+,.2f}** · อัตราแลกเปลี่ยน {thb:.2f} บาท/ดอลลาร์ "
+                       "(ไม่รวมกำไร/ขาดทุนจากค่าเงิน)")
+
+        if held:
+            sc_map = load_screener(SCREENER_FILE.stat().st_mtime).set_index("ticker") if SCREENER_FILE.exists() else None
+            rows_h = []
+            for k, v in sorted(held.items(), key=lambda kv: -kv[1]["shares"] * (prices.get(kv[0]) or 0)):
+                p = prices.get(k)
+                val = v["shares"] * (p or 0)
+                r = {"Symbol": k, "หุ้น": v["shares"], "ต้นทุนเฉลี่ย": v["avg"], "ราคาล่าสุด": p, "มูลค่า": val,
+                     "สัดส่วน %": val / value * 100 if value else None,
+                     "กำไร/ขาดทุน $": val - v["cost"], "กำไร/ขาดทุน %": (val / v["cost"] - 1) * 100 if v["cost"] else None,
+                     "วันนี้ %": (p / prev[k] - 1) * 100 if p and prev.get(k) else None,
+                     "ปันผลรับ $": float(div_by.get(k, 0.0)), "MOS %": None, "คะแนน Buffett": ""}
+                if sc_map is not None and k in sc_map.index:
+                    srow = sc_map.loc[k]
+                    if pd.notna(srow.get("margin_of_safety")):
+                        r["MOS %"] = srow["margin_of_safety"] * 100
+                    r["คะแนน Buffett"] = f"{int(srow['score'])}/{int(srow['applicable'])}"
+                rows_h.append(r)
+            st.dataframe(pd.DataFrame(rows_h), hide_index=True, width="stretch", column_config={
+                "หุ้น": st.column_config.NumberColumn(format="%g"),
+                "ต้นทุนเฉลี่ย": st.column_config.NumberColumn(format="$%.2f"),
+                "ราคาล่าสุด": st.column_config.NumberColumn(format="$%.2f"),
+                "มูลค่า": st.column_config.NumberColumn(format="$%,.2f"),
+                "สัดส่วน %": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+                "กำไร/ขาดทุน $": st.column_config.NumberColumn(format="$%+,.2f"),
+                "กำไร/ขาดทุน %": st.column_config.NumberColumn(format="%+.1f%%"),
+                "วันนี้ %": st.column_config.NumberColumn(format="%+.2f%%"),
+                "ปันผลรับ $": st.column_config.NumberColumn(format="$%.2f"),
+                "MOS %": st.column_config.NumberColumn(format="%+.0f%%",
+                                                       help="จาก Screener ล่าสุด (เฉพาะหุ้นใน S&P 500)")})
+
+            g1, g2 = st.columns(2)
+            alloc = pd.DataFrame([{"Symbol": r["Symbol"], "มูลค่า": r["มูลค่า"]} for r in rows_h])
+            fig_a = go.Figure(go.Pie(labels=alloc["Symbol"], values=alloc["มูลค่า"], hole=0.5, textinfo="label+percent"))
+            fig_a.update_layout(height=320, margin=dict(l=10, r=10, t=30, b=10), title="สัดส่วนตามหุ้น", showlegend=False)
+            g1.plotly_chart(fig_a, width="stretch")
+            sect = {}
+            for r in rows_h:
+                try:
+                    inf = get_fundamentals(r["Symbol"])["info"]
+                    s_name = inf.get("sector") or ("ETF/กองทุน" if str(inf.get("quoteType", "")).upper() == "ETF" else "อื่นๆ")
+                except Exception:
+                    s_name = "อื่นๆ"
+                sect[s_name] = sect.get(s_name, 0) + r["มูลค่า"]
+            fig_s = go.Figure(go.Pie(labels=list(sect), values=list(sect.values()), hole=0.5, textinfo="label+percent"))
+            fig_s.update_layout(height=320, margin=dict(l=10, r=10, t=30, b=10), title="สัดส่วนตาม Sector", showlegend=False)
+            g2.plotly_chart(fig_s, width="stretch")
+
+            try:
+                spy = history_since("SPY", min(t["date"] for t in txs))["Close"]
+            except Exception:
+                spy = None
+            vh = pf.value_history(txs, {tk: h["Close"] for tk, h in hist.items() if not h.empty}, spy)
+            if not vh.empty:
+                fig_v = go.Figure()
+                fig_v.add_trace(go.Scatter(x=vh.index, y=vh["value"], name="มูลค่าพอร์ต", line=dict(color="#3b82f6", width=2)))
+                fig_v.add_trace(go.Scatter(x=vh.index, y=vh["invested"], name="เงินลงทุนสุทธิ",
+                                           line=dict(color="#94a3b8", dash="dash")))
+                if "benchmark" in vh:
+                    fig_v.add_trace(go.Scatter(x=vh.index, y=vh["benchmark"], name="ถ้าซื้อ S&P 500 (SPY) แทน",
+                                               line=dict(color="#f97316", width=1.5)))
+                fig_v.update_layout(height=380, hovermode="x unified", margin=dict(l=10, r=10, t=30, b=10),
+                                    title="มูลค่าพอร์ตเทียบเงินลงทุนและ S&P 500", yaxis_title="USD",
+                                    legend=dict(orientation="h", y=1.12))
+                st.plotly_chart(fig_v, width="stretch")
+                st.caption("เส้นส้ม = ถ้านำเงินจำนวนเดียวกันไปซื้อ/ขาย SPY ในวันเดียวกัน · ทั้งสองเส้นไม่รวมปันผล")
+        elif txs:
+            st.info("ขายหุ้นออกหมดแล้ว — ดูกำไรที่ขายแล้วด้านบน")
+        else:
+            st.info("ยังไม่มีรายการ — เพิ่มรายการซื้อด้านล่าง หรือนำเข้าจากไฟล์ CSV")
+
+        # ---- เพิ่มรายการ ----
+        with st.expander("➕ บันทึกการซื้อ/ขาย", expanded=not txs):
+            c1, c2, c3 = st.columns(3)
+            t_kind = c1.radio("ประเภท", ["ซื้อ", "ขาย"], horizontal=True, key="tx_kind")
+            t_date = c2.date_input("วันที่", value=pd.Timestamp.now().date(), key="tx_date",
+                                   max_value=pd.Timestamp.now().date())
+            opts = sorted(set(wl) | set(pos))
+            t_tk = c3.selectbox("หุ้น", opts + ["อื่นๆ (พิมพ์เอง)"], key="tx_tk")
+            if t_tk == "อื่นๆ (พิมพ์เอง)":
+                t_tk = st.text_input("Symbol", key="tx_tk_custom", placeholder="เช่น COST").strip().upper()
+            ref_px = close_on(t_tk, t_date) if t_tk else None
+            c4, c5, c6 = st.columns(3)
+            t_sh = c4.number_input("จำนวนหุ้น", min_value=0.0, value=0.0, step=1.0, format="%g", key="tx_sh",
+                                   help="ใส่ทศนิยมได้ ถ้าซื้อเศษหุ้น (fractional)")
+            t_px = c5.number_input("ราคาต่อหุ้น ($)", min_value=0.0, value=float(round(ref_px or 0, 2)), step=0.01,
+                                   format="%.2f", key=f"tx_px_{t_tk}_{t_date}",
+                                   help="ค่าเริ่มต้น = ราคาปิดของวันนั้น · แก้เป็นราคาที่ซื้อขายจริง")
+            t_fee = c6.number_input("ค่าธรรมเนียม ($)", min_value=0.0, value=0.0, step=0.01, format="%.2f", key="tx_fee")
+            t_note = st.text_input("บันทึก (ไม่บังคับ)", key="tx_note", placeholder="เช่น ซื้อตามแจ้งเตือน MOS 25%")
+            if t_tk and t_sh and t_px:
+                st.caption(f"รวม {'จ่าย' if t_kind == 'ซื้อ' else 'ได้รับ'} ≈ "
+                           f"${t_sh * t_px + (t_fee if t_kind == 'ซื้อ' else -t_fee):,.2f}")
+            if st.button("💾 บันทึกรายการ", key="tx_save", disabled=not (t_tk and t_sh > 0 and t_px > 0)):
+                tx = pf.new_tx(t_date, t_tk, "buy" if t_kind == "ซื้อ" else "sell", t_sh, t_px, t_fee, t_note)
+                err = pf.validate_sell(txs, tx)
+                if err:
+                    st.error(err)
+                else:
+                    txs.append(tx)
+                    if save_portfolio():
+                        st.toast(f"บันทึก{t_kind} {t_tk} แล้ว", icon="💼")
+                        st.rerun()
+
+        # ---- รายการทั้งหมด ----
+        if txs:
+            with st.expander(f"📜 ประวัติรายการ ({len(txs)})"):
+                for t in sorted(txs, key=lambda x: (x["date"], x.get("created", "")), reverse=True):
+                    c1, c2 = st.columns([6, 1])
+                    c1.markdown(f"{t['date']} · **{'🟢 ซื้อ' if t['kind'] == 'buy' else '🔴 ขาย'} {t['ticker']}** "
+                                f"{t['shares']:g} หุ้น @ ${t['price']:,.2f}"
+                                + (f" · ค่าธรรมเนียม ${t['fee']:,.2f}" if t["fee"] else "")
+                                + (f"  \n📝 {md_safe(t['note'])}" if t.get("note") else ""))
+                    if c2.button("🗑️", key=f"tx_del_{t['id']}", help="ลบรายการนี้"):
+                        remaining = [x for x in txs if x["id"] != t["id"]]
+                        bad = next((pf.validate_sell([y for y in remaining if y["id"] != s["id"]], s)
+                                    for s in remaining if s["kind"] == "sell"
+                                    and pf.validate_sell([y for y in remaining if y["id"] != s["id"]], s)), None)
+                        if bad:
+                            st.error("ลบไม่ได้: จะทำให้รายการขายภายหลังเกินจำนวนที่ถือ — ลบรายการขายก่อน")
+                        else:
+                            st.session_state.port_txs = remaining
+                            if save_portfolio():
+                                st.rerun()
+            if div_total and not divs.empty:
+                with st.expander(f"💵 ปันผลที่ควรได้รับ ({len(divs)} ครั้ง)"):
+                    st.dataframe(divs.sort_values("ex_date", ascending=False), hide_index=True, width="stretch",
+                                 column_config={"ex_date": "วัน XD", "per_share": st.column_config.NumberColumn("ต่อหุ้น", format="$%.4f"),
+                                                "shares": st.column_config.NumberColumn("หุ้น", format="%g"),
+                                                "gross": st.column_config.NumberColumn("ก่อนภาษี", format="$%.2f"),
+                                                "net": st.column_config.NumberColumn("สุทธิ", format="$%.2f")})
+                    st.caption("คำนวณจากประวัติปันผลของ Yahoo × จำนวนหุ้นที่ถือก่อนวัน XD — ตรวจกับรายงานของโบรกเกอร์")
+
+        # ---- สำรอง / นำเข้า ----
+        with st.expander("💾 สำรองข้อมูล / นำเข้า CSV"):
+            st.caption("แนะนำให้คัดลอกข้อมูลสำรองเก็บไว้ (เช่นใน Notes) เป็นระยะ — ถ้าลืมรหัสผ่านจะได้มีสำเนา")
+            st.code(pf.to_csv(txs), language=None)
+            up = st.file_uploader("นำเข้าไฟล์ CSV (คอลัมน์: date, ticker, kind, shares, price, fee, note)",
+                                  type=["csv"], key="port_csv")
+            if up is not None and st.button("นำเข้า (เพิ่มต่อจากรายการเดิม)", key="port_import"):
+                try:
+                    new = pf.from_csv(up.getvalue().decode("utf-8-sig"))
+                    st.session_state.port_txs = txs + new
+                    if save_portfolio():
+                        st.toast(f"นำเข้า {len(new)} รายการแล้ว", icon="✅")
+                        st.rerun()
+                except Exception as e:  # noqa: BLE001
+                    st.error(f"นำเข้าไม่สำเร็จ: {e}")
+
+        with st.expander("📘 วิธีอ่านพอร์ตและดูแลพอร์ตแบบ Buffett"):
+            st.markdown(guides.PORTFOLIO)
+
+
+# ================= คู่มือ =================
+with tab_manual:
+    manual = Path(__file__).with_name("MANUAL.md")
+    st.markdown(manual.read_text(encoding="utf-8") if manual.exists() else "ไม่พบไฟล์คู่มือ (MANUAL.md)")
 

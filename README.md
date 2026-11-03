@@ -1,5 +1,7 @@
 # US Stock Chart
 
+📖 **[คู่มือการใช้งานฉบับเต็ม (MANUAL.md)](MANUAL.md)** — เปิดในแอพได้ที่แท็บ 📖 คู่มือ
+
 แอพดูกราฟหุ้น/ETF อเมริกา (ข้อมูลจาก Yahoo Finance ผ่าน `yfinance`)
 
 ## ฟีเจอร์
@@ -9,6 +11,9 @@
 - Candlestick / Line, Log scale, MA50/MA200, Volume
 - แท็บ **ภาพรวม**: ราคาปิด, % วันนี้, ราคา Pre/After-hours ของทุกตัวใน watchlist
 - แท็บ **เปรียบเทียบ**: Total return (รวมปันผล) หลายตัวบนกราฟเดียว
+- แท็บ **บริษัท**: ข้อมูลบริษัทแปลไทย ข่าว และลิงก์ earnings call
+- แท็บ **แจ้งเตือน**: เตือนราคา/MOS เข้ามือถือผ่าน ntfy (GitHub Actions ตรวจทุก 30 นาที)
+- แท็บ **พอร์ต**: บันทึกซื้อขาย ต้นทุนเฉลี่ย กำไรขาดทุน ปันผล เทียบ S&P 500 (ข้อมูลเข้ารหัสด้วยรหัสผ่าน)
 - แท็บ **Screener**: คัดกรองหุ้น S&P 500 ด้วย Buffett checklist (GitHub Actions รัน `screener.py` ทุกวันเสาร์ บันทึกผลเป็น `screener.csv`)
 - แท็บ **Buffett**: Buffett checklist รายตัว (ROE, หนี้, margin, FCF, capex, ซื้อหุ้นคืน, DCF + Margin of safety) และ Buffett Indicator ของตลาดรวม (Market cap ÷ GDP จาก FRED)
 
