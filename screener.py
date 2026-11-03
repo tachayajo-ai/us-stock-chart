@@ -14,10 +14,11 @@ import pandas as pd
 import requests
 import yfinance as yf
 
-from buffett import (buffett_checks, current_price, dcf_options, default_growth, fetch_fundamentals,
+from buffett import (build_buffett_indicator, buffett_checks, current_price, dcf_options, default_growth, fetch_fundamentals,
                      is_company, is_financial, price_to_book, share_count, valuation_rows)
 
 OUT = Path(__file__).with_name("screener.csv")
+BI_OUT = Path(__file__).with_name("buffett_indicator.csv")
 UA = {"User-Agent": "Mozilla/5.0 (us-stock-chart screener)"}
 DISCOUNT, TERMINAL = 0.10, 0.025
 
@@ -118,6 +119,14 @@ def main():
         time.sleep(args.delay)
 
     print(f"OK {len(results)} · skipped {len(skipped)}: {', '.join(skipped[:30])}")
+    # Buffett Indicator ของตลาดรวม (ล้มเหลวได้โดยไม่กระทบผลคัดกรองหุ้น)
+    try:
+        bi = build_buffett_indicator()
+        bi.to_csv(BI_OUT, float_format="%.4f")
+        print(f"Wrote {BI_OUT.name} ({len(bi)} quarters, latest {bi.index[-1]:%Y-%m-%d}: {bi['ratio'].iloc[-1]:.0f}%)")
+    except Exception as e:  # noqa: BLE001
+        print(f"Buffett Indicator failed: {e}", file=sys.stderr)
+
     if len(results) < args.min_results:
         sys.exit(f"Only {len(results)} results (< {args.min_results}); keeping previous {OUT.name}")
 

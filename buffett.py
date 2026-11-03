@@ -1,5 +1,9 @@
 """Buffett checklist / Owner Earnings / DCF — ใช้ร่วมกันระหว่าง app.py และ screener.py"""
+import io
+import time
+
 import pandas as pd
+import requests
 import yfinance as yf
 
 def fetch_fundamentals(ticker: str) -> dict:
@@ -56,25 +60,25 @@ def fmt_money(v: float) -> str:
 
 def owner_earnings(f: dict) -> pd.DataFrame | None:
     """Owner Earnings (Buffett, จดหมายผู้ถือหุ้น 1986)
-    = กำไรสุทธิ + ค่าเสื่อม/ค่าตัดจำหน่าย ± การเปลี่ยนแปลง working capital − Maintenance capex
-    Maintenance capex ประมาณแบบ Greenwald: capex ทั้งหมด − growth capex
-    โดย growth capex = (Net PPE ÷ รายได้ เฉลี่ย) × รายได้ที่เพิ่มขึ้นในปีนั้น"""
+    สูตรเดิม: กำไรสุทธิ + ค่าเสื่อม + รายการที่ไม่ใช่เงินสด ± working capital − Maintenance capex
+    ซึ่ง "กำไรสุทธิ + ค่าเสื่อม + ไม่ใช่เงินสด ± working capital" ก็คือ กระแสเงินสดจากการดำเนินงาน (OCF)
+    จึงใช้: OE = OCF − ค่าตอบแทนเป็นหุ้น (SBC, Buffett ถือว่าเป็นต้นทุนจริง) − Maintenance capex
+    (ไม่ใช้บรรทัด "Change In Working Capital" ของ Yahoo ตรงๆ เพราะบางบริษัทไม่ตรงกับงบจริง เช่น Visa)
+    Maintenance capex ประมาณแบบ Greenwald: capex ทั้งหมด − (Net PPE ÷ รายได้) × รายได้ที่เพิ่มขึ้น"""
     inc, bal, cf = f["inc"], f["bal"], f["cf"]
     ni = _col(inc, "Net Income", "Net Income Common Stockholders")
-    da = _col(cf, "Depreciation And Amortization", "Depreciation Amortization Depletion",
-              "Depreciation")
+    ocf = _col(cf, "Operating Cash Flow", "Cash Flow From Continuing Operating Activities")
     capex = _col(cf, "Capital Expenditure")
-    if ni is None or da is None or capex is None:
+    if ocf is None or capex is None:
         return None
-    wc = _col(cf, "Change In Working Capital")
+    sbc = _col(cf, "Stock Based Compensation")
     rev = _col(inc, "Total Revenue", "Operating Revenue")
     ppe = _col(bal, "Net PPE")
-    df = pd.concat({"ni": ni, "da": da, "capex": capex.abs()}, axis=1, join="inner").dropna()
+    df = pd.concat({"ocf": ocf, "capex": capex.abs()}, axis=1, join="inner").dropna()
     if df.empty:
         return None
-    # working capital แกว่งแรงรายปี (เช่นเงินพักชำระของ Visa, ภาษีค้างจ่าย) -> ใช้ค่าเฉลี่ยทั้งช่วงแทนค่ารายปี
-    df["wc_raw"] = wc.reindex(df.index).fillna(0) if wc is not None else 0.0
-    df["wc"] = float(df["wc_raw"].mean())
+    df["ni"] = ni.reindex(df.index) if ni is not None else float("nan")
+    df["sbc"] = sbc.reindex(df.index).fillna(0) if sbc is not None else 0.0
     df["growth_capex"] = 0.0
     if rev is not None and ppe is not None:
         ppe_to_sales = (ppe / rev).dropna().mean()
@@ -82,7 +86,7 @@ def owner_earnings(f: dict) -> pd.DataFrame | None:
         if pd.notna(ppe_to_sales):
             df["growth_capex"] = (ppe_to_sales * d_rev).clip(upper=df["capex"])
     df["maint_capex"] = df["capex"] - df["growth_capex"]
-    df["oe"] = df["ni"] + df["da"] + df["wc"] - df["maint_capex"]
+    df["oe"] = df["ocf"] - df["sbc"] - df["maint_capex"]
     return df
 
 
@@ -371,3 +375,34 @@ def price_to_book(f: dict):
         return mc / float(eq.iloc[-1]) if eq.iloc[-1] > 0 else None
     pb = info.get("priceToBook")
     return pb if pb and pb >= 0.05 else None
+
+
+# ---------------- Buffett Indicator (ตลาดรวม) ----------------
+def fetch_fred(series_id: str, timeout: int = 60, tries: int = 3) -> pd.Series:
+    """ดึงข้อมูลจาก FRED (ไม่ต้องใช้ API key) ลองใหม่ถ้า timeout"""
+    last = None
+    for attempt in range(tries):
+        try:
+            r = requests.get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
+                             headers={"User-Agent": "Mozilla/5.0"}, timeout=timeout)
+            r.raise_for_status()
+            df = pd.read_csv(io.StringIO(r.text))
+            df.columns = ["date", "value"]
+            df["date"] = pd.to_datetime(df["date"])
+            df["value"] = pd.to_numeric(df["value"], errors="coerce")
+            return df.dropna().set_index("date")["value"]
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if attempt < tries - 1:
+                time.sleep(5 * (attempt + 1))
+    raise last
+
+
+def build_buffett_indicator(timeout: int = 60, tries: int = 3) -> pd.DataFrame:
+    """มูลค่าหุ้นบริษัทนอกภาคการเงิน (NCBEILQ027S, ล้าน USD) ÷ GDP (พันล้าน USD) × 100"""
+    mcap = fetch_fred("NCBEILQ027S", timeout, tries) / 1000
+    gdp = fetch_fred("GDP", timeout, tries)
+    df = pd.concat({"mcap_bn": mcap, "gdp_bn": gdp}, axis=1, join="inner").dropna()
+    df["ratio"] = df["mcap_bn"] / df["gdp_bn"] * 100
+    df.index.name = "date"
+    return df

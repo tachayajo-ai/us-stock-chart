@@ -3,7 +3,6 @@
 """
 import base64
 import importlib
-import io
 import json
 import sys
 from datetime import time
@@ -19,7 +18,7 @@ import yfinance as yf
 # Streamlit Cloud อัปเดต app.py แต่ไม่โหลด buffett.py ใหม่ -> บังคับโหลดใหม่ กัน ImportError หลังอัปเดตไฟล์
 if "buffett" in sys.modules:
     importlib.reload(sys.modules["buffett"])
-from buffett import (BASIS_OE, buffett_checks, current_price, dcf_options, default_growth,
+from buffett import (BASIS_OE, buffett_checks, build_buffett_indicator, current_price, dcf_options, default_growth,
                      fetch_fundamentals, fmt_money, is_company, price_to_book, share_count,
                      valuation_rows)
 
@@ -364,16 +363,17 @@ def get_fundamentals(ticker: str) -> dict:
     return fetch_fundamentals(ticker)
 
 
+BI_FILE = Path(__file__).with_name("buffett_indicator.csv")
+
+
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
-def fred_series(series_id: str) -> pd.Series:
-    r = requests.get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
-                     headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
-    r.raise_for_status()
-    df = pd.read_csv(io.StringIO(r.text))
-    df.columns = ["date", "value"]
-    df["date"] = pd.to_datetime(df["date"])
-    df["value"] = pd.to_numeric(df["value"], errors="coerce")
-    return df.dropna().set_index("date")["value"]
+def load_buffett_indicator(mtime: float) -> tuple[pd.Series, str]:
+    """ใช้ไฟล์ที่ GitHub Actions บันทึกไว้ทุกสัปดาห์ (FRED มักบล็อก/ช้าเมื่อเรียกจาก Streamlit Cloud)
+    ถ้ายังไม่มีไฟล์ค่อยดึงสดจาก FRED"""
+    if BI_FILE.exists():
+        df = pd.read_csv(BI_FILE, parse_dates=["date"]).set_index("date")
+        return df["ratio"], "ไฟล์ที่บันทึกทุกสัปดาห์"
+    return build_buffett_indicator(timeout=15, tries=1)["ratio"], "FRED (ดึงสด)"
 
 
 with tab_buffett:
@@ -459,12 +459,13 @@ with tab_buffett:
         oet = extra.get("oe_table")
         with st.expander("🔎 Owner Earnings รายปี — ที่มาของตัวเลข"):
             if oet is None:
-                st.info("งบไม่มีข้อมูลค่าเสื่อมราคาหรือ capex พอจะคำนวณ Owner Earnings")
+                st.info("งบไม่มีข้อมูลกระแสเงินสดจากการดำเนินงานหรือ capex พอจะคำนวณ Owner Earnings")
             else:
                 show = pd.DataFrame({
-                    "กำไรสุทธิ": oet["ni"], "+ ค่าเสื่อม/ค่าตัดจำหน่าย": oet["da"],
-                    "(Working capital รายปี)": oet["wc_raw"], "± Working capital (เฉลี่ยทั้งช่วง)": oet["wc"],
-                    "Capex ทั้งหมด": -oet["capex"],
+                    "(กำไรสุทธิ — ไว้เทียบ)": oet["ni"],
+                    "กระแสเงินสดจากการดำเนินงาน (OCF)": oet["ocf"],
+                    "− ค่าตอบแทนเป็นหุ้น (SBC)": -oet["sbc"],
+                    "(Capex ทั้งหมด)": -oet["capex"],
                     "(Growth capex)": oet["growth_capex"], "− Maintenance capex": -oet["maint_capex"],
                     "= Owner earnings": oet["oe"],
                 }).T
@@ -474,10 +475,10 @@ with tab_buffett:
                     st.caption(f"Owner earnings yield (เฉลี่ย 3 ปี ÷ มูลค่าตลาด) = {oe_y:.1%} · "
                                f"เทียบเท่า P/OE {1 / oe_y:.1f} เท่า" if oe_y > 0 else
                                f"Owner earnings yield = {oe_y:.1%}")
-                st.caption("สูตร Buffett (1986): Owner earnings = กำไรสุทธิ + ค่าเสื่อม ± working capital − "
-                           "Maintenance capex · Maintenance capex ประมาณแบบ Greenwald = capex ทั้งหมด − "
-                           "(Net PPE ÷ รายได้) × รายได้ที่เพิ่มขึ้น · ถ้าไม่มีข้อมูล PPE จะถือว่า capex ทั้งหมดเป็น maintenance · "
-                           "Working capital ใช้ค่าเฉลี่ยทั้งช่วง เพราะรายปีแกว่งแรงจากรายการชั่วคราว")
+                st.caption("สูตร Buffett (1986): กำไรสุทธิ + ค่าเสื่อม + รายการไม่ใช่เงินสด ± working capital − "
+                           "Maintenance capex ซึ่งส่วนแรกรวมกันก็คือ OCF · จึงคิดเป็น OE = OCF − SBC − Maintenance capex "
+                           "(หัก SBC เพราะ Buffett ถือว่าเป็นค่าใช้จ่ายจริง) · Maintenance capex ประมาณแบบ Greenwald = "
+                           "capex ทั้งหมด − (Net PPE ÷ รายได้) × รายได้ที่เพิ่มขึ้น")
         st.caption("ข้อที่ระบบประเมินไม่ได้แต่ Buffett ให้ความสำคัญ: เข้าใจธุรกิจไหม · มี moat ยั่งยืนไหม · "
                    "ผู้บริหารซื่อตรงและจัดสรรเงินเก่งไหม — ต้องประเมินเอง · ไม่ใช่คำแนะนำการลงทุน")
 
@@ -485,11 +486,8 @@ with tab_buffett:
     st.divider()
     st.markdown("### 🇺🇸 Buffett Indicator (มูลค่าตลาดหุ้นรวม ÷ GDP)")
     try:
-        with st.spinner("กำลังโหลดข้อมูล FRED…"):
-            mcap = fred_series("NCBEILQ027S") / 1000  # ล้าน → พันล้าน USD
-            gdp = fred_series("GDP")                   # พันล้าน USD (annualized)
-        bi = (pd.concat([mcap, gdp], axis=1, join="inner").dropna()
-              .pipe(lambda d: d.iloc[:, 0] / d.iloc[:, 1] * 100))
+        with st.spinner("กำลังโหลดข้อมูล Buffett Indicator…"):
+            bi, bi_src = load_buffett_indicator(BI_FILE.stat().st_mtime if BI_FILE.exists() else 0.0)
         last_date = bi.index[-1]
         q_end = last_date + pd.offsets.QuarterEnd(0)
         vti = get_history("VTI", "2y", "1d", False)["Close"]
@@ -531,12 +529,13 @@ with tab_buffett:
                            margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.05))
         st.plotly_chart(figb, width="stretch")
         st.caption(
-            "ที่มา: FRED — Corporate equities ของบริษัทนอกภาคการเงิน (NCBEILQ027S) ÷ GDP · ข้อมูลรายไตรมาส "
+            f"ข้อมูลจาก{bi_src} · ที่มา: FRED — Corporate equities ของบริษัทนอกภาคการเงิน (NCBEILQ027S) ÷ GDP · ข้อมูลรายไตรมาส "
             "ประกาศช้า ~3 เดือน ค่าปัจจุบันจึงประมาณจากการเปลี่ยนแปลงราคา VTI (ทั้งตลาด) หลังสิ้นไตรมาส · "
             "เกณฑ์ 75/90/115/135% มาจาก Buffett ปี 2001 แต่ค่านี้มีแนวโน้มสูงขึ้นตามเวลา "
             "(บริษัทมีรายได้ต่างประเทศมากขึ้น ดอกเบี้ยต่ำลง) จึงควรดูประกอบกับค่าเฉลี่ยและ SD")
     except Exception as e:  # noqa: BLE001
-        st.warning(f"โหลดข้อมูล Buffett Indicator ไม่สำเร็จ ลองกด Refresh อีกครั้ง ({type(e).__name__})")
+        st.warning(f"โหลดข้อมูล Buffett Indicator ไม่สำเร็จ ({type(e).__name__}) — ไปที่ GitHub → Actions → "
+                   "Run workflow เพื่อบันทึกข้อมูลลง repo แล้วรอ 15 นาที")
 
 
 # ================= Screener (S&P 500) =================
