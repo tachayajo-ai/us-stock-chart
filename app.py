@@ -463,7 +463,8 @@ with tab_buffett:
             else:
                 show = pd.DataFrame({
                     "กำไรสุทธิ": oet["ni"], "+ ค่าเสื่อม/ค่าตัดจำหน่าย": oet["da"],
-                    "± Working capital": oet["wc"], "Capex ทั้งหมด": -oet["capex"],
+                    "(Working capital รายปี)": oet["wc_raw"], "± Working capital (เฉลี่ยทั้งช่วง)": oet["wc"],
+                    "Capex ทั้งหมด": -oet["capex"],
                     "(Growth capex)": oet["growth_capex"], "− Maintenance capex": -oet["maint_capex"],
                     "= Owner earnings": oet["oe"],
                 }).T
@@ -475,7 +476,8 @@ with tab_buffett:
                                f"Owner earnings yield = {oe_y:.1%}")
                 st.caption("สูตร Buffett (1986): Owner earnings = กำไรสุทธิ + ค่าเสื่อม ± working capital − "
                            "Maintenance capex · Maintenance capex ประมาณแบบ Greenwald = capex ทั้งหมด − "
-                           "(Net PPE ÷ รายได้) × รายได้ที่เพิ่มขึ้น · ถ้าไม่มีข้อมูล PPE จะถือว่า capex ทั้งหมดเป็น maintenance")
+                           "(Net PPE ÷ รายได้) × รายได้ที่เพิ่มขึ้น · ถ้าไม่มีข้อมูล PPE จะถือว่า capex ทั้งหมดเป็น maintenance · "
+                           "Working capital ใช้ค่าเฉลี่ยทั้งช่วง เพราะรายปีแกว่งแรงจากรายการชั่วคราว")
         st.caption("ข้อที่ระบบประเมินไม่ได้แต่ Buffett ให้ความสำคัญ: เข้าใจธุรกิจไหม · มี moat ยั่งยืนไหม · "
                    "ผู้บริหารซื่อตรงและจัดสรรเงินเก่งไหม — ต้องประเมินเอง · ไม่ใช่คำแนะนำการลงทุน")
 

@@ -72,7 +72,9 @@ def owner_earnings(f: dict) -> pd.DataFrame | None:
     df = pd.concat({"ni": ni, "da": da, "capex": capex.abs()}, axis=1, join="inner").dropna()
     if df.empty:
         return None
-    df["wc"] = wc.reindex(df.index).fillna(0) if wc is not None else 0.0
+    # working capital แกว่งแรงรายปี (เช่นเงินพักชำระของ Visa, ภาษีค้างจ่าย) -> ใช้ค่าเฉลี่ยทั้งช่วงแทนค่ารายปี
+    df["wc_raw"] = wc.reindex(df.index).fillna(0) if wc is not None else 0.0
+    df["wc"] = float(df["wc_raw"].mean())
     df["growth_capex"] = 0.0
     if rev is not None and ppe is not None:
         ppe_to_sales = (ppe / rev).dropna().mean()
@@ -285,13 +287,18 @@ MAX_GROWTH = 0.10
 def default_growth(extra: dict, basis: str) -> float:
     """อัตราเติบโตเริ่มต้นแบบระวัง:
     - กระแสเงินสดเคยติดลบ/เป็นศูนย์ในช่วงที่ดู -> 0% (ธุรกิจคาดการณ์ไม่ได้)
-    - ไม่งั้นใช้ค่าต่ำกว่าระหว่าง CAGR ของกระแสเงินสด กับ CAGR ของรายได้
-      (กันกรณีกำไรฟื้นจากฐานต่ำ เช่นหลัง COVID แล้วดูเหมือนโตเร็ว)
+    - ไม่งั้นใช้ค่าต่ำกว่าระหว่าง CAGR ของกระแสเงินสด (เฉลี่ยเคลื่อนที่ 2 ปี ลดผลของปีที่ผิดปกติ)
+      กับ CAGR ของรายได้ (กันกรณีกำไรฟื้นจากฐานต่ำ เช่นหลัง COVID)
     - จำกัดไว้ 0-10%"""
     cash = extra.get("oe") if basis == BASIS_OE else extra.get("fcf")
-    if cash is not None and (cash <= 0).any():
+    if cash is None or len(cash) < 2:
+        return 0.05
+    if (cash <= 0).any():
         return 0.0
-    g = extra.get("oe_cagr" if basis == BASIS_OE else "fcf_cagr", 0.05)
+    smooth = cash.rolling(2).mean().dropna() if len(cash) >= 3 else cash
+    g = _cagr(smooth)
+    if g is None:
+        g = 0.05
     rev_g = _cagr(extra.get("rev"))
     if rev_g is not None:
         g = min(g, rev_g)
