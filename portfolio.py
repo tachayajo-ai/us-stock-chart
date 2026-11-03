@@ -173,3 +173,19 @@ def from_csv(text: str) -> list[dict]:
         out.append(new_tx(pd.Timestamp(r["date"]).date(), str(r["ticker"]), kind, float(r["shares"]),
                           float(r["price"]), float(r.get("fee", 0) or 0), str(r.get("note", "") or "")))
     return out
+
+
+# ---------------- หลายพอร์ต ----------------
+def new_portfolio(name: str) -> dict:
+    return {"id": uuid.uuid4().hex[:8], "name": name.strip(), "txs": []}
+
+
+def normalize(data) -> dict:
+    """รองรับไฟล์รุ่นแรก (list ของรายการ = พอร์ตเดียว) → {"portfolios": [...]}"""
+    if isinstance(data, list):
+        p = new_portfolio("พอร์ตหลัก")
+        p["txs"] = data
+        return {"portfolios": [p]}
+    if isinstance(data, dict) and isinstance(data.get("portfolios"), list):
+        return data
+    raise ValueError("รูปแบบข้อมูลพอร์ตไม่ถูกต้อง")

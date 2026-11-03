@@ -1082,13 +1082,13 @@ def close_on(ticker: str, d) -> float | None:
 
 
 def save_portfolio() -> bool:
-    return write_repo_json(PORT_FILE, pf.encrypt(st.session_state.port_txs, st.session_state.port_pw),
+    return write_repo_json(PORT_FILE, pf.encrypt(st.session_state.port_data, st.session_state.port_pw),
                            "Update portfolio (encrypted)")
 
 
 with tab_port:
     st.markdown("### 💼 พอร์ตของฉัน")
-    if "port_txs" not in st.session_state:
+    if "port_data" not in st.session_state:
         blob = read_repo_json(PORT_FILE)
         if not (isinstance(blob, dict) and {"salt", "data"} <= blob.keys()):
             blob = None
@@ -1104,24 +1104,71 @@ with tab_port:
                 elif p1 != p2:
                     st.error("รหัสผ่านสองช่องไม่ตรงกัน")
                 else:
-                    st.session_state.port_txs, st.session_state.port_pw = [], p1
+                    st.session_state.port_data = {"portfolios": [pf.new_portfolio("พอร์ตหลัก")]}
+                    st.session_state.port_pw = p1
                     if save_portfolio():
                         st.rerun()
         else:
             pw = st.text_input("รหัสผ่านพอร์ต", type="password", key="port_pw_in")
             if st.button("🔓 เปิดพอร์ต", key="port_unlock", disabled=not pw):
                 try:
-                    st.session_state.port_txs = pf.decrypt(blob, pw)
+                    st.session_state.port_data = pf.normalize(pf.decrypt(blob, pw))
                     st.session_state.port_pw = pw
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))
     else:
-        txs = st.session_state.port_txs
+        ports = st.session_state.port_data["portfolios"]
+        ALL_PORTS = "📊 รวมทุกพอร์ต"
+        names = [p["name"] for p in ports] + ([ALL_PORTS] if len(ports) > 1 else [])
+        if "port_sel_next" in st.session_state:  # ตั้งค่าที่ต้องการสลับไว้จากรอบก่อน (หลังสร้าง/เปลี่ยนชื่อ/ลบ)
+            st.session_state.port_sel = st.session_state.pop("port_sel_next")
+        if st.session_state.get("port_sel") not in names:
+            st.session_state.port_sel = names[0]
+        sel_name = st.selectbox("พอร์ต", names, key="port_sel")
+        combined = sel_name == ALL_PORTS
+        cur = None if combined else next(p for p in ports if p["name"] == sel_name)
+        txs = [t for p in ports for t in p["txs"]] if combined else cur["txs"]
+        if combined:
+            st.caption(f"รวม {len(ports)} พอร์ต · เพิ่ม/ลบรายการได้เฉพาะในแต่ละพอร์ต")
+
+        with st.expander("⚙️ จัดการพอร์ต (สร้างใหม่ / เปลี่ยนชื่อ / ลบ)"):
+            n1, n2 = st.columns([3, 1])
+            new_name = n1.text_input("ชื่อพอร์ตใหม่", key="port_new_name", placeholder="เช่น พอร์ตปันผล, พอร์ตเกษียณ")
+            if n2.button("➕ สร้าง", key="port_add", disabled=not new_name.strip()):
+                if new_name.strip() in [p["name"] for p in ports] or new_name.strip() == ALL_PORTS:
+                    st.error("มีพอร์ตชื่อนี้แล้ว")
+                else:
+                    ports.append(pf.new_portfolio(new_name))
+                    if save_portfolio():
+                        st.session_state.port_sel_next = new_name.strip()
+                        st.rerun()
+            if cur is not None:
+                r1, r2 = st.columns([3, 1])
+                ren = r1.text_input(f"เปลี่ยนชื่อ \"{cur['name']}\" เป็น", key=f"port_ren_{cur['id']}")
+                if r2.button("✏️ เปลี่ยนชื่อ", key="port_ren_btn", disabled=not ren.strip()):
+                    if ren.strip() in [p["name"] for p in ports] or ren.strip() == ALL_PORTS:
+                        st.error("มีพอร์ตชื่อนี้แล้ว")
+                    else:
+                        cur["name"] = ren.strip()
+                        if save_portfolio():
+                            st.session_state.port_sel_next = ren.strip()
+                            st.rerun()
+                if len(ports) > 1:
+                    d1, d2 = st.columns([3, 1])
+                    confirm = d1.text_input(f"พิมพ์ชื่อ \"{cur['name']}\" เพื่อยืนยันการลบ "
+                                            f"(รายการ {len(cur['txs'])} รายการจะหายด้วย)", key=f"port_del_cf_{cur['id']}")
+                    if d2.button("🗑️ ลบพอร์ต", key="port_del_btn", disabled=confirm.strip() != cur["name"]):
+                        ports.remove(cur)
+                        if save_portfolio():
+                            st.session_state.port_sel_next = ports[0]["name"]
+                            st.rerun()
+                else:
+                    st.caption("ลบพอร์ตได้เมื่อมีมากกว่า 1 พอร์ต")
         top_l, top_r = st.columns([4, 1])
         top_l.caption("🔒 เปิดพอร์ตอยู่ — ปิดแท็บเบราว์เซอร์หรือกดล็อกเมื่อใช้เสร็จ")
         if top_r.button("🔒 ล็อก", key="port_lock"):
-            for k in ("port_txs", "port_pw"):
+            for k in ("port_data", "port_pw", "port_sel"):
                 st.session_state.pop(k, None)
             st.rerun()
 
@@ -1237,7 +1284,11 @@ with tab_port:
             st.info("ยังไม่มีรายการ — เพิ่มรายการซื้อด้านล่าง หรือนำเข้าจากไฟล์ CSV")
 
         # ---- เพิ่มรายการ ----
-        with st.expander("➕ บันทึกการซื้อ/ขาย", expanded=not txs):
+        with st.expander("➕ บันทึกการซื้อ/ขาย" + ("" if combined else f" — {cur['name']}"),
+                         expanded=not txs and not combined):
+          if combined:
+            st.info("เลือกพอร์ตที่ต้องการด้านบนก่อนบันทึกรายการ")
+          else:
             c1, c2, c3 = st.columns(3)
             t_kind = c1.radio("ประเภท", ["ซื้อ", "ขาย"], horizontal=True, key="tx_kind")
             t_date = c2.date_input("วันที่", value=pd.Timestamp.now().date(), key="tx_date",
@@ -1272,13 +1323,15 @@ with tab_port:
         # ---- รายการทั้งหมด ----
         if txs:
             with st.expander(f"📜 ประวัติรายการ ({len(txs)})"):
+                owner = {t["id"]: p["name"] for p in ports for t in p["txs"]}
                 for t in sorted(txs, key=lambda x: (x["date"], x.get("created", "")), reverse=True):
                     c1, c2 = st.columns([6, 1])
                     c1.markdown(f"{t['date']} · **{'🟢 ซื้อ' if t['kind'] == 'buy' else '🔴 ขาย'} {t['ticker']}** "
-                                f"{t['shares']:g} หุ้น @ ${t['price']:,.2f}"
+                                + (f"[{md_safe(owner.get(t['id'], ''))}] " if combined else "")
+                                + f"{t['shares']:g} หุ้น @ ${t['price']:,.2f}"
                                 + (f" · ค่าธรรมเนียม ${t['fee']:,.2f}" if t["fee"] else "")
                                 + (f"  \n📝 {md_safe(t['note'])}" if t.get("note") else ""))
-                    if c2.button("🗑️", key=f"tx_del_{t['id']}", help="ลบรายการนี้"):
+                    if not combined and c2.button("🗑️", key=f"tx_del_{t['id']}", help="ลบรายการนี้"):
                         remaining = [x for x in txs if x["id"] != t["id"]]
                         bad = next((pf.validate_sell([y for y in remaining if y["id"] != s["id"]], s)
                                     for s in remaining if s["kind"] == "sell"
@@ -1286,7 +1339,7 @@ with tab_port:
                         if bad:
                             st.error("ลบไม่ได้: จะทำให้รายการขายภายหลังเกินจำนวนที่ถือ — ลบรายการขายก่อน")
                         else:
-                            st.session_state.port_txs = remaining
+                            cur["txs"] = remaining
                             if save_portfolio():
                                 st.rerun()
             if div_total and not divs.empty:
@@ -1301,13 +1354,16 @@ with tab_port:
         # ---- สำรอง / นำเข้า ----
         with st.expander("💾 สำรองข้อมูล / นำเข้า CSV"):
             st.caption("แนะนำให้คัดลอกข้อมูลสำรองเก็บไว้ (เช่นใน Notes) เป็นระยะ — ถ้าลืมรหัสผ่านจะได้มีสำเนา")
-            st.code(pf.to_csv(txs), language=None)
-            up = st.file_uploader("นำเข้าไฟล์ CSV (คอลัมน์: date, ticker, kind, shares, price, fee, note)",
-                                  type=["csv"], key="port_csv")
+            for p in (ports if combined else [cur]):
+                st.markdown(f"**{md_safe(p['name'])}** ({len(p['txs'])} รายการ)")
+                st.code(pf.to_csv(p["txs"]), language=None)
+            up = None if combined else st.file_uploader(
+                f"นำเข้าไฟล์ CSV เข้าพอร์ต \"{cur['name']}\" (คอลัมน์: date, ticker, kind, shares, price, fee, note)",
+                type=["csv"], key="port_csv")
             if up is not None and st.button("นำเข้า (เพิ่มต่อจากรายการเดิม)", key="port_import"):
                 try:
                     new = pf.from_csv(up.getvalue().decode("utf-8-sig"))
-                    st.session_state.port_txs = txs + new
+                    cur["txs"] = txs + new
                     if save_portfolio():
                         st.toast(f"นำเข้า {len(new)} รายการแล้ว", icon="✅")
                         st.rerun()
