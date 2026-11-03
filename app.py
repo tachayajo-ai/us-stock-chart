@@ -16,11 +16,12 @@ import streamlit as st
 import yfinance as yf
 
 # Streamlit Cloud อัปเดต app.py แต่ไม่โหลด buffett.py ใหม่ -> บังคับโหลดใหม่ กัน ImportError หลังอัปเดตไฟล์
-for _mod in ("buffett", "guides", "company"):
+for _mod in ("buffett", "guides", "company", "alerts"):
     if _mod in sys.modules:
         importlib.reload(sys.modules[_mod])
 import guides  # noqa: E402
 from company import earnings_links, fetch_earnings, fetch_news, translate, translate_lines  # noqa: E402
+import alerts as alerts_mod  # noqa: E402
 from buffett import (BASIS_OE, buffett_checks, build_buffett_indicator, current_price, dcf_options, default_growth,
                      implied_growth,
                      fetch_fundamentals, fmt_money, is_company, price_to_book, share_count,
@@ -57,14 +58,53 @@ def _github_cfg():
         return None
 
 
-def _gh_request(method: str, body: dict | None = None):
+def _gh_request(method: str, body: dict | None = None, path: str = "watchlist.json"):
     token, repo = _github_cfg()
     return requests.request(
         method,
-        f"https://api.github.com/repos/{repo}/contents/watchlist.json",
+        f"https://api.github.com/repos/{repo}/contents/{path}",
         headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
         json=body, timeout=15,
     )
+
+
+def read_repo_json(path: str):
+    """อ่านไฟล์ JSON จาก GitHub repo (บนคลาวด์) หรือจากโฟลเดอร์แอพ (บนคอม) · None ถ้าไม่มี"""
+    if _github_cfg():
+        try:
+            r = _gh_request("GET", path=path)
+            if r.status_code == 200:
+                st.session_state.setdefault("gh_sha", {})[path] = r.json()["sha"]
+                return json.loads(base64.b64decode(r.json()["content"]))
+        except Exception:
+            pass
+        return None
+    try:
+        return json.loads(Path(__file__).with_name(path).read_text())
+    except Exception:
+        return None
+
+
+def write_repo_json(path: str, data, message: str) -> bool:
+    text = json.dumps(data, indent=2, ensure_ascii=False)
+    if not _github_cfg():
+        Path(__file__).with_name(path).write_text(text)
+        return True
+    shas = st.session_state.setdefault("gh_sha", {})
+    body = {"message": message, "content": base64.b64encode(text.encode()).decode()}
+    if shas.get(path):
+        body["sha"] = shas[path]
+    r = _gh_request("PUT", body, path)
+    if r.status_code in (409, 422):  # sha เก่า: ดึงใหม่แล้วลองอีกครั้ง
+        g = _gh_request("GET", path=path)
+        if g.status_code == 200:
+            body["sha"] = g.json()["sha"]
+            r = _gh_request("PUT", body, path)
+    if r.status_code in (200, 201):
+        shas[path] = r.json()["content"]["sha"]
+        return True
+    st.toast(f"บันทึก {path} ไม่สำเร็จ (GitHub {r.status_code})", icon="⚠️")
+    return False
 
 
 def _clean(data) -> list[str] | None:
@@ -74,49 +114,38 @@ def _clean(data) -> list[str] | None:
 
 
 def load_watchlist() -> list[str]:
-    if _github_cfg():
-        try:
-            r = _gh_request("GET")
-            if r.status_code == 200:
-                st.session_state.wl_sha = r.json()["sha"]
-                data = _clean(json.loads(base64.b64decode(r.json()["content"])))
-                if data is not None:
-                    return data
-        except Exception:
-            pass
-        return DEFAULT_WATCHLIST.copy()
-    try:
-        data = _clean(json.loads(WATCHLIST_FILE.read_text()))
-        if data is not None:
-            return data
-    except Exception:
-        pass
-    return DEFAULT_WATCHLIST.copy()
+    data = _clean(read_repo_json("watchlist.json"))
+    return data if data is not None else DEFAULT_WATCHLIST.copy()
 
 
 def save_watchlist(tickers: list[str]) -> None:
-    text = json.dumps(tickers, indent=2)
-    if _github_cfg():
-        body = {"message": "Update watchlist",
-                "content": base64.b64encode(text.encode()).decode()}
-        if st.session_state.get("wl_sha"):
-            body["sha"] = st.session_state.wl_sha
-        r = _gh_request("PUT", body)
-        if r.status_code == 409 or r.status_code == 422:  # sha เก่า: ดึงใหม่แล้วลองอีกครั้ง
-            g = _gh_request("GET")
-            if g.status_code == 200:
-                body["sha"] = g.json()["sha"]
-                r = _gh_request("PUT", body)
-        if r.status_code in (200, 201):
-            st.session_state.wl_sha = r.json()["content"]["sha"]
-        else:
-            st.toast(f"บันทึก watchlist ไม่สำเร็จ (GitHub {r.status_code})", icon="⚠️")
-        return
-    WATCHLIST_FILE.write_text(text)
+    write_repo_json("watchlist.json", tickers, "Update watchlist")
 
 
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = load_watchlist()
+if "alerts" not in st.session_state:
+    _al = read_repo_json("alerts.json")
+    st.session_state.alerts = [x for x in (_al if isinstance(_al, list) else [])
+                               if isinstance(x, dict) and {"id", "ticker", "kind", "target"} <= x.keys()]
+
+
+def save_alerts() -> bool:
+    return write_repo_json("alerts.json", st.session_state.alerts, "Update price alerts")
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_alert_state(_nonce: int = 0) -> dict:
+    data = read_repo_json("alerts_state.json")
+    return data if isinstance(data, dict) else {}
+
+
+def last_price(ticker: str) -> float | None:
+    try:
+        h = get_history(ticker, "2d", "5m", True)
+        return float(h["Close"].dropna().iloc[-1]) if not h.empty else None
+    except Exception:
+        return None
 
 
 # ---------------- data ----------------
@@ -216,8 +245,8 @@ if not wl:
 if st.session_state.get("selected") not in wl:
     st.session_state.selected = wl[0]
 
-tab_chart, tab_overview, tab_compare, tab_company, tab_buffett, tab_screener = st.tabs(
-    ["📈 กราฟ", "📋 ภาพรวม", "⚖️ เปรียบเทียบ", "🏢 บริษัท", "🎩 Buffett", "🔍 Screener"])
+tab_chart, tab_overview, tab_compare, tab_company, tab_buffett, tab_screener, tab_alerts = st.tabs(
+    ["📈 กราฟ", "📋 ภาพรวม", "⚖️ เปรียบเทียบ", "🏢 บริษัท", "🎩 Buffett", "🔍 Screener", "🔔 แจ้งเตือน"])
 
 # ---------------- tab: chart ----------------
 with tab_chart:
@@ -596,6 +625,13 @@ with tab_buffett:
                                                    price, shares_out, dr, tg)),
                     language=None, wrap_lines=True)
             st.markdown("[เปิด Claude ↗](https://claude.ai/new)")
+        if iv and not extra.get("financial"):
+            q_target = iv * 0.75
+            if st.button(f"🔔 แจ้งเตือนเมื่อ MOS ถึง 25% (ราคา ≤ ${q_target:,.2f}) ด้วยสมมติฐาน DCF ตอนนี้",
+                         key=f"quick_alert_{b_ticker}"):
+                st.session_state.alerts.append(alerts_mod.new_alert(b_ticker, "mos", q_target, iv=iv, mos=0.25))
+                if save_alerts():
+                    st.toast(f"ตั้งเตือน {b_ticker} แล้ว — ดูที่แท็บ 🔔 แจ้งเตือน", icon="🔔")
 
         # กราฟงบการเงินรายปี
         figf = go.Figure()
@@ -921,4 +957,100 @@ with tab_company:
             st.markdown(f"- **[{label}]({url})** — {desc}")
         with st.expander("📘 วิธีอ่านผลงบและฟัง earnings call"):
             st.markdown(guides.EARNINGS)
+
+
+# ================= แจ้งเตือนราคา =================
+with tab_alerts:
+    st.markdown("### 🔔 แจ้งเตือนราคา")
+    st.caption("GitHub ตรวจราคาให้ทุก 30 นาที (จันทร์–ศุกร์ ช่วง Pre-market ถึง After-hours) แล้วส่งแจ้งเตือนเข้ามือถือ"
+               "ผ่านแอพ ntfy · แต่ละรายการแจ้งครั้งเดียว กด \"ตั้งใหม่\" เพื่อให้เตือนอีกครั้ง")
+    al = st.session_state.alerts
+    with st.expander("➕ ตั้งเตือนใหม่", expanded=not al):
+        a_t = st.selectbox("หุ้น", wl, index=wl.index(st.session_state.selected), key="al_ticker")
+        a_kind = st.radio("เตือนเมื่อ", ["Margin of safety ถึง", "ราคาลงถึง", "ราคาขึ้นถึง"], horizontal=True,
+                          key="al_kind")
+        p_now = last_price(a_t)
+        st.caption(f"ราคาล่าสุด {a_t}: ${p_now:,.2f}" if p_now else "ไม่พบราคาล่าสุด")
+        a_target, a_iv, a_mos, can_save = None, None, None, True
+        if a_kind == "Margin of safety ถึง":
+            fa = get_fundamentals(a_t)
+            if not is_company(fa):
+                st.warning("ETF/กองทุนไม่มีมูลค่า DCF — ใช้แบบ \"ราคาลงถึง\" แทน")
+                can_save = False
+            else:
+                _rows, ex = buffett_checks(fa)
+                if ex.get("financial"):
+                    st.warning("หุ้นกลุ่มการเงินไม่คำนวณ DCF — ใช้แบบ \"ราคาลงถึง\" โดยดู P/B ประกอบ")
+                    can_save = False
+                else:
+                    pr = current_price(fa["info"]) or p_now
+                    bas = dcf_options(ex)[0]
+                    _vr, iv0, _m, _oe = valuation_rows(ex, pr, share_count(fa["info"], pr), bas,
+                                                       default_growth(ex, bas), 0.10, 0.025, None)
+                    a_iv = st.number_input("มูลค่าที่แท้จริงที่ใช้ ($ ต่อหุ้น)", min_value=0.0,
+                                           value=float(round(iv0, 2)) if iv0 else float(round(p_now or 0, 2)),
+                                           step=1.0, key=f"al_iv_{a_t}",
+                                           help="ค่าเริ่มต้น = DCF ด้วยสมมติฐานตั้งต้นของแอพ · ถ้าปรับสมมติฐานในแท็บ 🎩 Buffett "
+                                                "แล้วได้ค่าอื่น ใส่ค่านั้นแทนได้")
+                    a_mos = st.slider("Margin of safety ที่ต้องการ", 0, 60, 25, 5, format="%d%%", key="al_mos") / 100
+                    a_target = a_iv * (1 - a_mos)
+                    if not iv0:
+                        st.caption("คำนวณ DCF อัตโนมัติไม่ได้ (กระแสเงินสดติดลบ/ไม่มีข้อมูล) — ใส่มูลค่าเอง")
+        else:
+            base_p = float(round(p_now or 100.0, 2))
+            a_target = st.number_input("ราคาเป้าหมาย ($)", min_value=0.0,
+                                       value=round(base_p * (0.9 if a_kind == "ราคาลงถึง" else 1.1), 2),
+                                       step=1.0, key=f"al_px_{a_t}_{a_kind}")
+        if st.session_state.pop("al_clear_note", False):
+            st.session_state.al_note = ""
+        a_note = st.text_input("บันทึกช่วยจำ (ไม่บังคับ)", key="al_note", placeholder="เช่น ทยอยซื้อไม้แรก 30%")
+        if a_target and p_now:
+            kind_code = {"Margin of safety ถึง": "mos", "ราคาลงถึง": "below", "ราคาขึ้นถึง": "above"}[a_kind]
+            preview = {"kind": kind_code, "target": a_target}
+            d = alerts_mod.distance(preview, p_now)
+            st.info(f"จะแจ้งเมื่อราคา {'≥' if kind_code == 'above' else '≤'} **${a_target:,.2f}** · "
+                    + ("ถึงแล้วตอนนี้ (จะแจ้งรอบตรวจถัดไป)" if d == 0 else f"ห่างจากราคาตอนนี้ {d:+.1%}"))
+        if st.button("💾 บันทึกการเตือน", disabled=not (can_save and a_target), key="al_save"):
+            kind_code = {"Margin of safety ถึง": "mos", "ราคาลงถึง": "below", "ราคาขึ้นถึง": "above"}[a_kind]
+            st.session_state.alerts.append(alerts_mod.new_alert(a_t, kind_code, a_target, iv=a_iv, mos=a_mos,
+                                                                note=a_note))
+            if save_alerts():
+                st.session_state.al_clear_note = True
+                st.toast(f"ตั้งเตือน {a_t} แล้ว", icon="🔔")
+                st.rerun()
+
+    state = load_alert_state()
+    if not al:
+        st.info("ยังไม่มีการตั้งเตือน — กด ➕ ตั้งเตือนใหม่ หรือกดปุ่ม 🔔 ในแท็บ 🎩 Buffett")
+    else:
+        st.markdown(f"**รายการเตือน ({len(al)})**")
+        for i, item in enumerate(list(al)):
+            p = last_price(item["ticker"])
+            done = state.get(item["id"])
+            if done:
+                status = f"✅ แจ้งแล้ว {done['triggered_at']} ที่ ${done['price']:,.2f}"
+            elif p and alerts_mod.is_hit(item, p):
+                status = "🎯 ถึงเป้าแล้ว — จะแจ้งในรอบตรวจถัดไป"
+            elif p:
+                status = f"⏳ รอ — ต้อง{'ขึ้น' if item['kind'] == 'above' else 'ลง'}อีก {abs(alerts_mod.distance(item, p)):.1%}"
+            else:
+                status = "⏳ รอ"
+            c1, c2, c3 = st.columns([5, 1.2, 1])
+            c1.markdown(f"**{item['ticker']}** · {alerts_mod.describe(item)}  \n"
+                        f"ราคาล่าสุด {'$' + format(p, ',.2f') if p else '—'} · {status}"
+                        + (f"  \n📝 {md_safe(item['note'])}" if item.get("note") else ""))
+            if done and c2.button("🔁 ตั้งใหม่", key=f"al_rearm_{item['id']}", help="เปิดให้เตือนอีกครั้ง"):
+                al[i] = dict(item, id=alerts_mod.new_alert(item["ticker"], "below", 1)["id"])
+                if save_alerts():
+                    st.rerun()
+            if c3.button("🗑️ ลบ", key=f"al_del_{item['id']}"):
+                al.pop(i)
+                if save_alerts():
+                    st.rerun()
+        if st.button("🔄 อัปเดตสถานะ", key="al_refresh"):
+            load_alert_state.clear()
+            st.rerun()
+
+    with st.expander("📘 วิธีตั้งค่าแอพ ntfy และใช้การแจ้งเตือนให้ได้ผล"):
+        st.markdown(guides.ALERTS)
 

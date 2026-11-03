@@ -1,0 +1,49 @@
+name: Price alerts
+
+on:
+  schedule:
+    - cron: "*/30 9-23 * * 1-5"  # ทุก 30 นาที วันจันทร์–ศุกร์ ครอบคลุม Pre-market ถึง After-hours (เวลา UTC)
+    - cron: "17 0 * * 2-6"       # รอบท้าย After-hours (เวลาสหรัฐช่วงฤดูหนาว)
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "ส่งแจ้งเตือนทดสอบ"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: alerts
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packages
+        run: pip install -q yfinance pandas requests
+
+      - name: Check alerts
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          if [ "${{ inputs.test }}" = "true" ]; then python alerts.py --test; else python alerts.py; fi
+
+      - name: Save state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f alerts_state.json ]; then git add alerts_state.json; fi
+          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
+          git commit -m "Update alert state"
+          git pull --rebase origin main
+          git push
