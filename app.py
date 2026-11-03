@@ -461,6 +461,50 @@ def sp500_indicator(bi_df: pd.DataFrame) -> dict | None:
             "anchor_date": f"{anchor_date:%Y-%m-%d}", "anchor_mcap_tn": anchor_mcap / 1000,
             "gdp_tn": float(gdp.iloc[-1]) / 1000, "n": len(uniq)}
 
+
+def analyst_package(ticker, f, rows, extra, price, iv, mos, passed, applicable,
+                    basis, g, dr, tg, tnx, imp) -> str:
+    """ข้อความสรุปตัวเลขจากแอพ สำหรับวางให้ Claude วิเคราะห์ต่อ"""
+    info = f["info"]
+    mc = info.get("marketCap")
+    lines = [
+        f"วิเคราะห์หุ้น {ticker} ด้วย skill stock-analyst โดยใช้ข้อมูลจากแอพด้านล่างประกอบ "
+        "และค้นข้อมูลล่าสุดเพิ่มเติม (10-K, earnings call, proxy statement, ข่าว)",
+        "",
+        f"=== ข้อมูลจากแอพ US Stock Chart ({pd.Timestamp.now():%Y-%m-%d}) ===",
+        f"บริษัท: {info.get('longName') or info.get('shortName') or ticker} ({ticker})",
+        f"Sector / Industry: {info.get('sector', '-')} / {info.get('industry', '-')}",
+        f"ราคา: ${price:,.2f}" + (f" · มูลค่าตลาด: {fmt_money(mc)}" if mc else "") if price else "ราคา: -",
+        f"ผลตอบแทนพันธบัตรรัฐบาลสหรัฐ 10 ปี: {tnx:.2%}" if tnx else "",
+        "",
+        f"[Buffett checklist] ผ่าน {passed}/{applicable} ข้อที่ประเมินได้",
+    ]
+    for r in rows:
+        lines.append(f"- {r['หลักเกณฑ์']} (เกณฑ์ {r['เกณฑ์ผ่าน']}): {r['ค่าจริง']} → {r['ผล']}")
+    yrs = sorted(set().union(*[set(s.index) for s in (extra.get("rev"), extra.get("ni"), extra.get("fcf"),
+                                                       extra.get("oe")) if s is not None]))
+    if yrs:
+        lines += ["", "[งบการเงินรายปี] ปี | รายได้ | กำไรสุทธิ | Free cash flow | Owner earnings"]
+        for y in yrs:
+            def v(key):
+                s = extra.get(key)
+                return fmt_money(s[y]) if s is not None and y in s.index and pd.notna(s[y]) else "-"
+            lines.append(f"{y} | {v('rev')} | {v('ni')} | {v('fcf')} | {v('oe')}")
+    lines.append("")
+    if extra.get("financial"):
+        pb, roe_i = price_to_book(f), info.get("returnOnEquity")
+        lines.append("[มูลค่า] กลุ่มการเงิน — แอพไม่คำนวณ DCF"
+                     + (f" · P/B {pb:.2f} เท่า" if pb else "") + (f" · ROE ล่าสุด {roe_i:.1%}" if roe_i else ""))
+    else:
+        lines.append(f"[มูลค่า DCF จากแอพ] ฐาน {basis} · เติบโต {g:.1%}/ปี 10 ปี · discount {dr:.1%} · terminal {tg:.1%}")
+        lines.append(f"มูลค่าที่แท้จริง: {'$' + format(iv, ',.2f') if iv else '-'} · Margin of safety: "
+                     f"{format(mos, '+.0%') if mos is not None else '-'}")
+        if imp is not None:
+            lines.append(f"ราคาปัจจุบันคาดการณ์ให้กระแสเงินสดโต {imp:+.1%}/ปี นาน 10 ปี")
+    lines += ["", "หมายเหตุ: ตัวเลขจาก Yahoo Finance งบ 4 ปีล่าสุด อาจคลาดเคลื่อน ให้ตรวจกับ 10-K"]
+    return "\n".join(x for x in lines if x is not None)
+
+
 with tab_buffett:
     st.markdown("### 🎩 Buffett checklist รายตัว")
     b_ticker = st.selectbox("เลือกหุ้น", wl, index=wl.index(st.session_state.selected), key="buffett_ticker")
@@ -543,6 +587,15 @@ with tab_buffett:
             st.markdown(guides.CHECKLIST)
             if extra.get("financial"):
                 st.markdown(guides.FINANCIAL)
+        with st.expander("🤖 ส่งข้อมูลให้นักวิเคราะห์ AI (Claude)"):
+            st.caption("กดไอคอนคัดลอกที่มุมขวาบนของกล่องด้านล่าง → เปิด Claude (แชทใหม่หรือใน Project) → วาง "
+                       "· Claude จะใช้ skill stock-analyst วิเคราะห์โดยใช้ตัวเลขชุดนี้ร่วมกับข้อมูลที่ค้นเพิ่มเอง")
+            st.code(analyst_package(b_ticker, f, rows, extra, price, iv, mos, passed, applicable,
+                                    basis, g, dr, tg, tnx,
+                                    implied_growth(extra.get("oe_base" if basis == BASIS_OE else "fcf_base"),
+                                                   price, shares_out, dr, tg)),
+                    language=None, wrap_lines=True)
+            st.markdown("[เปิด Claude ↗](https://claude.ai/new)")
 
         # กราฟงบการเงินรายปี
         figf = go.Figure()
