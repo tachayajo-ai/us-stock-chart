@@ -405,7 +405,7 @@ with tab_buffett:
             tg = c3.slider("Terminal growth", 0.0, 0.04, 0.025, 0.005, format="%.3f", key=f"tg_{b_ticker}")
             st.caption(
                 f"ฐาน {basis} = ค่าเฉลี่ย 3 ปีล่าสุด {fmt_money(base) if base else '—'} · "
-                "ค่าเริ่มต้นของการเติบโต = CAGR ในอดีต (จำกัด 0–15%) · "
+                "ค่าเริ่มต้นของการเติบโต = ค่าต่ำกว่าระหว่าง CAGR กระแสเงินสดกับ CAGR รายได้ จำกัด 0–10% (ถ้าเคยติดลบ = 0%) · "
                 "สูตร: PV ของกระแสเงินสด 10 ปี + Terminal value ÷ จำนวนหุ้น · 0.10 = 10%")
 
         try:
@@ -549,8 +549,8 @@ with tab_screener:
     else:
         sc = load_screener(SCREENER_FILE.stat().st_mtime)
         st.caption(f"อัปเดตล่าสุด {sc['updated'].iloc[0]} · {len(sc)} บริษัท · คำนวณใหม่อัตโนมัติทุกวันเสาร์ · "
-                   "DCF ใช้ค่าเริ่มต้น (discount 10%, terminal 2.5%, growth = CAGR ในอดีต จำกัด 0–15%) · "
-                   "กลุ่ม Financials ไม่คำนวณ DCF/MOS ให้ดู P/B แทน")
+                   "DCF ใช้ค่าเริ่มต้น (discount 10%, terminal 2.5%, growth = ต่ำกว่าระหว่าง CAGR กระแสเงินสด/รายได้ จำกัด 0–10%) · "
+                   "ธนาคาร/ประกัน/โบรกเกอร์ ไม่คำนวณ DCF/MOS ให้ดู P/B แทน")
 
         c1, c2, c3 = st.columns([1.2, 1.2, 2])
         min_score = c1.slider("คะแนนขั้นต่ำ (% ข้อที่ผ่าน)", 0, 100, 70, 5, key="sc_min")
@@ -562,8 +562,9 @@ with tab_screener:
 
         view = sc[sc["score_pct"] * 100 >= min_score]
         if min_mos > -100:  # ซ้ายสุด = ไม่กรอง MOS (รวมตัวที่คำนวณ DCF ไม่ได้)
-            view = view[(view["margin_of_safety"].fillna(-9) * 100 >= min_mos)
-                        | (view["sector"] == "Financials")]  # การเงินไม่มี MOS ไม่ตัดออก
+            fin = (view["financial"].astype(str).str.lower() == "true") if "financial" in view.columns \
+                else (view["sector"] == "Financials")
+            view = view[(view["margin_of_safety"].fillna(-9) * 100 >= min_mos) | fin]  # การเงินไม่มี MOS ไม่ตัดออก
         if pick_sec:
             view = view[view["sector"].isin(pick_sec)]
         if query:

@@ -89,8 +89,21 @@ FIN_WHY = ("ธนาคาร/ประกัน/บริษัทการเ
            "จึงไม่ใช่เงินที่เจ้าของดึงออกได้จริง")
 
 
+# อุตสาหกรรม (Yahoo) ที่กระแสเงินสดปนเงินฝาก/เบี้ยประกัน/เงินลูกค้า -> DCF ใช้ไม่ได้
+FIN_INDUSTRY_PREFIXES = ("banks", "insurance -", "capital markets", "asset management",
+                         "mortgage finance", "credit services", "financial conglomerates")
+# อยู่ใน Credit Services แต่เป็นเครือข่ายชำระเงิน ไม่ได้ปล่อยกู้ -> ใช้ DCF ได้
+PAYMENT_NETWORKS = {"V", "MA", "PYPL"}
+
+
 def is_financial(info: dict, sector: str | None = None) -> bool:
-    """Yahoo ใช้ 'Financial Services' · GICS (Wikipedia) ใช้ 'Financials'"""
+    """ใช้ industry ของ Yahoo ก่อน (แยกธนาคาร/ประกัน ออกจาก Visa, Moody's, FactSet ได้)
+    ถ้าไม่มีข้อมูล industry จึงใช้ sector (Yahoo 'Financial Services' / GICS 'Financials')"""
+    industry = str(info.get("industry", "")).strip().lower()
+    if industry:
+        if str(info.get("symbol", "")).upper() in PAYMENT_NETWORKS:
+            return False
+        return industry.startswith(FIN_INDUSTRY_PREFIXES)
     names = {str(info.get("sector", "")).strip().lower(), str(sector or "").strip().lower()}
     return bool(names & {"financial services", "financials"})
 
@@ -260,9 +273,29 @@ def dcf_options(extra: dict) -> list[str]:
     return options
 
 
+def _cagr(s):
+    if s is None or len(s) < 2 or s.iloc[0] <= 0 or s.iloc[-1] <= 0 or s.index[-1] <= s.index[0]:
+        return None
+    return (s.iloc[-1] / s.iloc[0]) ** (1 / (s.index[-1] - s.index[0])) - 1
+
+
+MAX_GROWTH = 0.10
+
+
 def default_growth(extra: dict, basis: str) -> float:
-    key = "oe_cagr" if basis == BASIS_OE else "fcf_cagr"
-    return float(min(max(extra.get(key, 0.05), 0.0), 0.15))
+    """อัตราเติบโตเริ่มต้นแบบระวัง:
+    - กระแสเงินสดเคยติดลบ/เป็นศูนย์ในช่วงที่ดู -> 0% (ธุรกิจคาดการณ์ไม่ได้)
+    - ไม่งั้นใช้ค่าต่ำกว่าระหว่าง CAGR ของกระแสเงินสด กับ CAGR ของรายได้
+      (กันกรณีกำไรฟื้นจากฐานต่ำ เช่นหลัง COVID แล้วดูเหมือนโตเร็ว)
+    - จำกัดไว้ 0-10%"""
+    cash = extra.get("oe") if basis == BASIS_OE else extra.get("fcf")
+    if cash is not None and (cash <= 0).any():
+        return 0.0
+    g = extra.get("oe_cagr" if basis == BASIS_OE else "fcf_cagr", 0.05)
+    rev_g = _cagr(extra.get("rev"))
+    if rev_g is not None:
+        g = min(g, rev_g)
+    return float(min(max(g, 0.0), MAX_GROWTH))
 
 
 def valuation_rows(extra: dict, price, shares_out, basis: str, g: float, dr: float, tg: float, tnx):

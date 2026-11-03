@@ -52,7 +52,8 @@ def screen_one(ticker: str, name: str, sector: str, tnx) -> dict | None:
     f = fetch_with_retry(ticker)
     if f is None or not is_company(f):
         return None
-    checks, extra = buffett_checks(f, financial=is_financial(f["info"], sector))
+    financial = is_financial(f["info"], sector)
+    checks, extra = buffett_checks(f, financial=financial)
     info = f["info"]
     price = current_price(info)
     shares = share_count(info, price)
@@ -72,7 +73,7 @@ def screen_one(ticker: str, name: str, sector: str, tnx) -> dict | None:
         "oe_yield": oe_y, "roe": m.get("roe"), "gross_margin": m.get("gross_margin"),
         "net_margin": m.get("net_margin"), "debt_years": m.get("debt_years"),
         "capex_to_ni": m.get("capex_to_ni"), "share_change": m.get("share_change"),
-        "dcf_basis": basis, "dcf_growth": g,
+        "dcf_basis": basis, "dcf_growth": g, "financial": financial,
         "failed": " | ".join(r["หลักเกณฑ์"] for r in rows if r["_s"] == "fail"),
     }
 
