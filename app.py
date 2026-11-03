@@ -2,8 +2,10 @@
 รัน:  streamlit run app.py
 """
 import base64
+import importlib
 import io
 import json
+import sys
 from datetime import time
 from pathlib import Path
 
@@ -14,6 +16,9 @@ import requests
 import streamlit as st
 import yfinance as yf
 
+# Streamlit Cloud อัปเดต app.py แต่ไม่โหลด buffett.py ใหม่ -> บังคับโหลดใหม่ กัน ImportError หลังอัปเดตไฟล์
+if "buffett" in sys.modules:
+    importlib.reload(sys.modules["buffett"])
 from buffett import (BASIS_OE, buffett_checks, current_price, dcf_options, default_growth,
                      fetch_fundamentals, fmt_money, is_company, price_to_book, share_count,
                      valuation_rows)
