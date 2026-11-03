@@ -92,8 +92,7 @@ def run_check(alerts: list[dict], state: dict, topic: str, price_fn=latest_price
         price = prices[t]
         if price is None or not is_hit(a, price):
             continue
-        arrow = "📈" if a["kind"] == "above" else "📉"
-        title = f"{arrow} {t} ${price:,.2f} — ถึงจุดที่ตั้งไว้"
+        title = f"{t} ${price:,.2f} — ถึงจุดที่ตั้งไว้"  # ไอคอนมาจาก tags (ntfy แสดงเป็น emoji ให้เอง)
         msg = describe(a)
         if a["kind"] == "mos" and a.get("iv"):
             msg += f"\nMOS ตอนนี้ {1 - price / a['iv']:+.0%}"
@@ -124,7 +123,7 @@ def main():
     import hashlib
     print(f"Topic fingerprint: {hashlib.sha256(topic.encode()).hexdigest()[:12]} (length {len(topic)})")
     if args.test:
-        send_ntfy(topic, "✅ ทดสอบแจ้งเตือนหุ้น", "ระบบแจ้งเตือนราคาของ US Stock Chart ทำงานแล้ว",
+        send_ntfy(topic, "ทดสอบแจ้งเตือนหุ้น", "ระบบแจ้งเตือนราคาของ US Stock Chart ทำงานแล้ว",
                   tags=["white_check_mark"], priority=3)
         print("Test notification sent")
         return
