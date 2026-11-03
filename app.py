@@ -368,12 +368,11 @@ BI_FILE = Path(__file__).with_name("buffett_indicator.csv")
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def load_buffett_indicator(mtime: float) -> tuple[pd.Series, str]:
-    """ใช้ไฟล์ที่ GitHub Actions บันทึกไว้ทุกสัปดาห์ (FRED มักบล็อก/ช้าเมื่อเรียกจาก Streamlit Cloud)
-    ถ้ายังไม่มีไฟล์ค่อยดึงสดจาก FRED"""
+    """ใช้ไฟล์ที่ GitHub Actions บันทึกไว้ทุกสัปดาห์ ถ้ายังไม่มีไฟล์ค่อยดึงสดจาก DBnomics"""
     if BI_FILE.exists():
         df = pd.read_csv(BI_FILE, parse_dates=["date"]).set_index("date")
         return df["ratio"], "ไฟล์ที่บันทึกทุกสัปดาห์"
-    return build_buffett_indicator(timeout=15, tries=1)["ratio"], "FRED (ดึงสด)"
+    return build_buffett_indicator(timeout=15, tries=1)["ratio"], "DBnomics (ดึงสด)"
 
 
 with tab_buffett:
@@ -529,7 +528,8 @@ with tab_buffett:
                            margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.05))
         st.plotly_chart(figb, width="stretch")
         st.caption(
-            f"ข้อมูลจาก{bi_src} · ที่มา: FRED — Corporate equities ของบริษัทนอกภาคการเงิน (NCBEILQ027S) ÷ GDP · ข้อมูลรายไตรมาส "
+            f"ข้อมูลจาก{bi_src} · ที่มา: Federal Reserve Z.1 มูลค่าหุ้นบริษัทนอกภาคการเงิน (FL103164105) ÷ GDP ของ BEA "
+            "ผ่าน DBnomics · ข้อมูลรายไตรมาส "
             "ประกาศช้า ~3 เดือน ค่าปัจจุบันจึงประมาณจากการเปลี่ยนแปลงราคา VTI (ทั้งตลาด) หลังสิ้นไตรมาส · "
             "เกณฑ์ 75/90/115/135% มาจาก Buffett ปี 2001 แต่ค่านี้มีแนวโน้มสูงขึ้นตามเวลา "
             "(บริษัทมีรายได้ต่างประเทศมากขึ้น ดอกเบี้ยต่ำลง) จึงควรดูประกอบกับค่าเฉลี่ยและ SD")

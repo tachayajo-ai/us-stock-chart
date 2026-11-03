@@ -1,5 +1,4 @@
 """Buffett checklist / Owner Earnings / DCF — ใช้ร่วมกันระหว่าง app.py และ screener.py"""
-import io
 import time
 
 import pandas as pd
@@ -378,19 +377,26 @@ def price_to_book(f: dict):
 
 
 # ---------------- Buffett Indicator (ตลาดรวม) ----------------
-def fetch_fred(series_id: str, timeout: int = 60, tries: int = 3) -> pd.Series:
-    """ดึงข้อมูลจาก FRED (ไม่ต้องใช้ API key) ลองใหม่ถ้า timeout"""
+# FRED บล็อกการเรียกจากเซิร์ฟเวอร์คลาวด์ (GitHub Actions / Streamlit Cloud) จึงใช้ DBnomics
+# ซึ่งเป็นตัวกลางข้อมูลทางการ (Federal Reserve, BEA) ฟรี ไม่ต้องใช้ API key
+DBN = "https://api.db.nomics.world/v22/series/"
+MCAP_SERIES = "FED/Z1/FL103164105.Q"    # Fed Z.1: มูลค่าตลาดหุ้นของบริษัทนอกภาคการเงิน (ล้าน USD)
+GDP_SERIES = "BEA/NIPA-T10105/A191RC-Q"  # BEA: GDP ราคาปัจจุบัน ปรับเป็นรายปี (ล้าน USD)
+
+
+def fetch_dbnomics(code: str, timeout: int = 60, tries: int = 3) -> pd.Series:
+    """คืน Series รายไตรมาส (index = วันแรกของไตรมาส)"""
     last = None
     for attempt in range(tries):
         try:
-            r = requests.get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
+            r = requests.get(DBN + code, params={"observations": 1},
                              headers={"User-Agent": "Mozilla/5.0"}, timeout=timeout)
             r.raise_for_status()
-            df = pd.read_csv(io.StringIO(r.text))
-            df.columns = ["date", "value"]
-            df["date"] = pd.to_datetime(df["date"])
-            df["value"] = pd.to_numeric(df["value"], errors="coerce")
-            return df.dropna().set_index("date")["value"]
+            doc = r.json()["series"]["docs"][0]
+            s = pd.Series(pd.to_numeric(doc["value"], errors="coerce"),
+                          index=pd.PeriodIndex([pd.Period(p, freq="Q") for p in doc["period"]]))
+            s.index = s.index.start_time
+            return s.dropna()
         except Exception as e:  # noqa: BLE001
             last = e
             if attempt < tries - 1:
@@ -399,9 +405,9 @@ def fetch_fred(series_id: str, timeout: int = 60, tries: int = 3) -> pd.Series:
 
 
 def build_buffett_indicator(timeout: int = 60, tries: int = 3) -> pd.DataFrame:
-    """มูลค่าหุ้นบริษัทนอกภาคการเงิน (NCBEILQ027S, ล้าน USD) ÷ GDP (พันล้าน USD) × 100"""
-    mcap = fetch_fred("NCBEILQ027S", timeout, tries) / 1000
-    gdp = fetch_fred("GDP", timeout, tries)
+    """มูลค่าตลาดหุ้นบริษัทนอกภาคการเงิน ÷ GDP × 100 (รายไตรมาส ตั้งแต่ 1947)"""
+    mcap = fetch_dbnomics(MCAP_SERIES, timeout, tries) / 1000  # ล้าน -> พันล้าน USD
+    gdp = fetch_dbnomics(GDP_SERIES, timeout, tries) / 1000
     df = pd.concat({"mcap_bn": mcap, "gdp_bn": gdp}, axis=1, join="inner").dropna()
     df["ratio"] = df["mcap_bn"] / df["gdp_bn"] * 100
     df.index.name = "date"
