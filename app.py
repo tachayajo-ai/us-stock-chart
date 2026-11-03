@@ -14,6 +14,9 @@ import requests
 import streamlit as st
 import yfinance as yf
 
+from buffett import (BASIS_OE, buffett_checks, current_price, dcf_options, default_growth,
+                     fetch_fundamentals, fmt_money, is_company, valuation_rows)
+
 WATCHLIST_FILE = Path(__file__).with_name("watchlist.json")
 DEFAULT_WATCHLIST = ["SPY", "QQQ", "VOO", "AAPL", "MSFT", "NVDA", "TSLA", "SCHD", "BRK-B"]
 ET = "America/New_York"
@@ -204,8 +207,8 @@ if not wl:
 if st.session_state.get("selected") not in wl:
     st.session_state.selected = wl[0]
 
-tab_chart, tab_overview, tab_compare, tab_buffett = st.tabs(
-    ["📈 กราฟ", "📋 ภาพรวม", "⚖️ เปรียบเทียบ", "🎩 Buffett"])
+tab_chart, tab_overview, tab_compare, tab_buffett, tab_screener = st.tabs(
+    ["📈 กราฟ", "📋 ภาพรวม", "⚖️ เปรียบเทียบ", "🎩 Buffett", "🔍 Screener"])
 
 # ---------------- tab: chart ----------------
 with tab_chart:
@@ -352,35 +355,7 @@ with tab_compare:
 # ================= Buffett =================
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def get_fundamentals(ticker: str) -> dict:
-    t = yf.Ticker(ticker)
-    try:
-        info = t.info or {}
-    except Exception:
-        info = {}
-
-    def clean(df):
-        if df is None or df.empty:
-            return pd.DataFrame()
-        df = df.T.sort_index()  # แถว = ปี (เก่า -> ใหม่)
-        df.index = pd.to_datetime(df.index).year
-        return df[~df.index.duplicated(keep="last")]
-
-    out = {"info": info}
-    for key, attr in (("inc", "income_stmt"), ("bal", "balance_sheet"), ("cf", "cashflow")):
-        try:
-            out[key] = clean(getattr(t, attr))
-        except Exception:
-            out[key] = pd.DataFrame()
-    return out
-
-
-def _col(df: pd.DataFrame, *names):
-    for n in names:
-        if n in df.columns:
-            s = pd.to_numeric(df[n], errors="coerce").dropna()
-            if len(s):
-                return s
-    return None
+    return fetch_fundamentals(ticker)
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
@@ -395,185 +370,6 @@ def fred_series(series_id: str) -> pd.Series:
     return df.dropna().set_index("date")["value"]
 
 
-def dcf_value(fcf0: float, growth: float, discount: float, terminal: float, years: int = 10) -> float:
-    """มูลค่าปัจจุบันของ FCF 10 ปี + Terminal value (Gordon growth)"""
-    pv, f = 0.0, fcf0
-    for y in range(1, years + 1):
-        f *= 1 + growth
-        pv += f / (1 + discount) ** y
-    tv = f * (1 + terminal) / (discount - terminal)
-    return pv + tv / (1 + discount) ** years
-
-
-def fmt_money(v: float) -> str:
-    a = abs(v)
-    for div, suf in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
-        if a >= div:
-            return f"${v / div:,.1f}{suf}"
-    return f"${v:,.0f}"
-
-
-def owner_earnings(f: dict) -> pd.DataFrame | None:
-    """Owner Earnings (Buffett, จดหมายผู้ถือหุ้น 1986)
-    = กำไรสุทธิ + ค่าเสื่อม/ค่าตัดจำหน่าย ± การเปลี่ยนแปลง working capital − Maintenance capex
-    Maintenance capex ประมาณแบบ Greenwald: capex ทั้งหมด − growth capex
-    โดย growth capex = (Net PPE ÷ รายได้ เฉลี่ย) × รายได้ที่เพิ่มขึ้นในปีนั้น"""
-    inc, bal, cf = f["inc"], f["bal"], f["cf"]
-    ni = _col(inc, "Net Income", "Net Income Common Stockholders")
-    da = _col(cf, "Depreciation And Amortization", "Depreciation Amortization Depletion",
-              "Depreciation")
-    capex = _col(cf, "Capital Expenditure")
-    if ni is None or da is None or capex is None:
-        return None
-    wc = _col(cf, "Change In Working Capital")
-    rev = _col(inc, "Total Revenue", "Operating Revenue")
-    ppe = _col(bal, "Net PPE")
-    df = pd.concat({"ni": ni, "da": da, "capex": capex.abs()}, axis=1, join="inner").dropna()
-    if df.empty:
-        return None
-    df["wc"] = wc.reindex(df.index).fillna(0) if wc is not None else 0.0
-    df["growth_capex"] = 0.0
-    if rev is not None and ppe is not None:
-        ppe_to_sales = (ppe / rev).dropna().mean()
-        d_rev = rev.diff().clip(lower=0).reindex(df.index).fillna(0)
-        if pd.notna(ppe_to_sales):
-            df["growth_capex"] = (ppe_to_sales * d_rev).clip(upper=df["capex"])
-    df["maint_capex"] = df["capex"] - df["growth_capex"]
-    df["oe"] = df["ni"] + df["da"] + df["wc"] - df["maint_capex"]
-    return df
-
-
-def buffett_checks(f: dict) -> tuple[list[dict], dict]:
-    inc, bal, cf = f["inc"], f["bal"], f["cf"]
-    ni = _col(inc, "Net Income", "Net Income Common Stockholders")
-    rev = _col(inc, "Total Revenue", "Operating Revenue")
-    gp = _col(inc, "Gross Profit")
-    eps = _col(inc, "Diluted EPS", "Basic EPS")
-    eq = _col(bal, "Stockholders Equity", "Common Stock Equity")
-    ltd = _col(bal, "Long Term Debt", "Long Term Debt And Capital Lease Obligation")
-    fcf = _col(cf, "Free Cash Flow")
-    capex = _col(cf, "Capital Expenditure")
-    shares = _col(bal, "Ordinary Shares Number", "Share Issued")
-    rows = []
-
-    def add(name, rule, value, status, why):
-        rows.append({"หลักเกณฑ์": name, "เกณฑ์ผ่าน": rule, "ค่าจริง": value,
-                     "ผล": {"pass": "✅ ผ่าน", "fail": "❌ ไม่ผ่าน", "na": "➖ N/A"}[status],
-                     "ทำไมสำคัญ": why, "_s": status})
-
-    # 1 ROE
-    if ni is not None and eq is not None:
-        both = pd.concat([ni, eq], axis=1, join="inner").dropna()
-        if len(both) and (both.iloc[:, 1] > 0).all():
-            roe = (both.iloc[:, 0] / both.iloc[:, 1]).mean()
-            add("ROE เฉลี่ย", "≥ 15%", f"{roe:.1%}", "pass" if roe >= 0.15 else "fail",
-                "ใช้เงินผู้ถือหุ้นสร้างกำไรได้ดี")
-        else:
-            add("ROE เฉลี่ย", "≥ 15%", "ส่วนผู้ถือหุ้นติดลบ", "na", "ROE ใช้ไม่ได้เมื่อ equity ติดลบ (มักเกิดจากซื้อหุ้นคืนมาก)")
-    else:
-        add("ROE เฉลี่ย", "≥ 15%", "ไม่มีข้อมูล", "na", "ใช้เงินผู้ถือหุ้นสร้างกำไรได้ดี")
-
-    # 2 Debt payoff years
-    if ni is not None:
-        debt = float(ltd.iloc[-1]) if ltd is not None else 0.0
-        last_ni = float(ni.iloc[-1])
-        if last_ni > 0:
-            yrs = debt / last_ni
-            add("หนี้ระยะยาว / กำไรสุทธิ", "≤ 4 ปี",
-                f"{yrs:.1f} ปี" if ltd is not None else "ไม่พบหนี้ระยะยาวในงบ", "pass" if yrs <= 4 else "fail",
-                "ใช้กำไรปิดหนี้ระยะยาวได้ภายใน 3-4 ปี")
-        else:
-            add("หนี้ระยะยาว / กำไรสุทธิ", "≤ 4 ปี", "ขาดทุน", "fail", "ใช้กำไรปิดหนี้ระยะยาวได้ภายใน 3-4 ปี")
-    else:
-        add("หนี้ระยะยาว / กำไรสุทธิ", "≤ 4 ปี", "ไม่มีข้อมูล", "na", "ใช้กำไรปิดหนี้ระยะยาวได้ภายใน 3-4 ปี")
-
-    # 3 Gross margin
-    if gp is not None and rev is not None:
-        gm = (gp / rev).dropna().mean()
-        add("Gross margin เฉลี่ย", "≥ 40%", f"{gm:.1%}", "pass" if gm >= 0.40 else "fail",
-            "สัญญาณของความได้เปรียบทางการแข่งขัน (moat) ตั้งราคาได้")
-    else:
-        add("Gross margin เฉลี่ย", "≥ 40%", "ไม่มีข้อมูล (เช่น ธนาคาร)", "na",
-            "สัญญาณของความได้เปรียบทางการแข่งขัน (moat) ตั้งราคาได้")
-
-    # 4 Net margin
-    if ni is not None and rev is not None:
-        nm = (ni / rev).dropna().mean()
-        add("Net margin เฉลี่ย", "≥ 20%", f"{nm:.1%}", "pass" if nm >= 0.20 else "fail",
-            "เหลือเป็นกำไรจริงมาก ต้นทุนแฝงต่ำ")
-    else:
-        add("Net margin เฉลี่ย", "≥ 20%", "ไม่มีข้อมูล", "na", "เหลือเป็นกำไรจริงมาก ต้นทุนแฝงต่ำ")
-
-    # 5 Consistent earnings
-    if eps is not None and ni is not None and len(eps) >= 2:
-        ok = (ni > 0).all() and eps.iloc[-1] > eps.iloc[0]
-        add("กำไรสม่ำเสมอและโตขึ้น", "ไม่ขาดทุน + EPS ล่าสุด > ปีแรก",
-            f"EPS {eps.iloc[0]:.2f} → {eps.iloc[-1]:.2f} ({eps.index[0]}–{eps.index[-1]})",
-            "pass" if ok else "fail", "ธุรกิจคาดการณ์ได้ ไม่ผันผวน")
-    else:
-        add("กำไรสม่ำเสมอและโตขึ้น", "ไม่ขาดทุน + EPS ล่าสุด > ปีแรก", "ไม่มีข้อมูล", "na",
-            "ธุรกิจคาดการณ์ได้ ไม่ผันผวน")
-
-    # 6 FCF positive
-    if fcf is not None:
-        add("Free cash flow เป็นบวกทุกปี", "FCF > 0 ทุกปี",
-            ", ".join(f"{y}: {fmt_money(v)}" for y, v in fcf.items()),
-            "pass" if (fcf > 0).all() else "fail", "กำไรเป็นเงินสดจริง ไม่ใช่แค่ตัวเลขบัญชี")
-    else:
-        add("Free cash flow เป็นบวกทุกปี", "FCF > 0 ทุกปี", "ไม่มีข้อมูล", "na",
-            "กำไรเป็นเงินสดจริง ไม่ใช่แค่ตัวเลขบัญชี")
-
-    # 7 Capex / NI
-    if capex is not None and ni is not None:
-        both = pd.concat([capex.abs(), ni], axis=1, join="inner").dropna()
-        both = both[both.iloc[:, 1] > 0]
-        if len(both):
-            ratio = (both.iloc[:, 0] / both.iloc[:, 1]).mean()
-            add("Capex / กำไรสุทธิ", "≤ 50%", f"{ratio:.0%}", "pass" if ratio <= 0.5 else "fail",
-                "ไม่ต้องลงทุนซ้ำมากเพื่อรักษาธุรกิจ")
-        else:
-            add("Capex / กำไรสุทธิ", "≤ 50%", "ขาดทุน", "fail", "ไม่ต้องลงทุนซ้ำมากเพื่อรักษาธุรกิจ")
-    else:
-        add("Capex / กำไรสุทธิ", "≤ 50%", "ไม่มีข้อมูล", "na", "ไม่ต้องลงทุนซ้ำมากเพื่อรักษาธุรกิจ")
-
-    # 8 Share count (ยอมให้เพิ่มได้ไม่เกิน 1% ตลอดช่วง เช่นจากหุ้นที่ให้พนักงานเล็กน้อย)
-    if shares is not None and len(shares) >= 2:
-        chg = shares.iloc[-1] / shares.iloc[0] - 1
-        add("จำนวนหุ้นไม่เพิ่ม (ไม่ dilute)", "เพิ่มไม่เกิน +1% ทั้งช่วง",
-            f"{chg:+.2%} ({shares.index[0]}: {shares.iloc[0] / 1e6:,.1f}M → "
-            f"{shares.index[-1]}: {shares.iloc[-1] / 1e6:,.1f}M หุ้น)",
-            "pass" if chg <= 0.01 else "fail", "ผู้ถือหุ้นเดิมไม่ถูก dilute · ถ้าลดลงแปลว่าบริษัทซื้อหุ้นคืน")
-    else:
-        add("จำนวนหุ้นไม่เพิ่ม (ไม่ dilute)", "เพิ่มไม่เกิน +1% ทั้งช่วง", "ไม่มีข้อมูล", "na",
-            "ผู้ถือหุ้นเดิมไม่ถูก dilute")
-
-    # ค่าเริ่มต้น DCF
-    extra = {"fcf": fcf}
-    if fcf is not None and len(fcf):
-        extra["fcf_base"] = float(fcf.tail(3).mean())
-        pos = fcf[fcf > 0]
-        if len(pos) >= 2 and pos.index[-1] > pos.index[0]:
-            n = pos.index[-1] - pos.index[0]
-            extra["fcf_cagr"] = (pos.iloc[-1] / pos.iloc[0]) ** (1 / n) - 1
-    extra["ni"], extra["rev"] = ni, rev
-    oe = owner_earnings(f)
-    extra["oe_table"] = oe
-    if oe is not None:
-        o = oe["oe"]
-        extra["oe"] = o
-        extra["oe_base"] = float(o.tail(3).mean())
-        pos = o[o > 0]
-        if len(pos) >= 2 and pos.index[-1] > pos.index[0]:
-            n = pos.index[-1] - pos.index[0]
-            extra["oe_cagr"] = (pos.iloc[-1] / pos.iloc[0]) ** (1 / n) - 1
-        rows.append({"หลักเกณฑ์": "Owner earnings เป็นบวกทุกปี", "เกณฑ์ผ่าน": "OE > 0 ทุกปี",
-                     "ค่าจริง": ", ".join(f"{y}: {fmt_money(v)}" for y, v in o.items()),
-                     "ผล": "✅ ผ่าน" if (o > 0).all() else "❌ ไม่ผ่าน",
-                     "ทำไมสำคัญ": "เงินที่เจ้าของดึงออกได้จริงโดยธุรกิจไม่เสียความสามารถในการแข่งขัน",
-                     "_s": "pass" if (o > 0).all() else "fail"})
-    return rows, extra
-
-
 with tab_buffett:
     st.markdown("### 🎩 Buffett checklist รายตัว")
     b_ticker = st.selectbox("เลือกหุ้น", wl, index=wl.index(st.session_state.selected), key="buffett_ticker")
@@ -582,29 +378,20 @@ with tab_buffett:
     info = f["info"]
     qtype = str(info.get("quoteType", "")).upper()
 
-    if qtype in ("ETF", "MUTUALFUND", "INDEX") or f["inc"].empty:
+    if not is_company(f):
         st.info(f"{b_ticker} เป็น {qtype or 'กองทุน/ดัชนี'} หรือไม่มีงบการเงิน — Buffett checklist ใช้ได้เฉพาะหุ้นรายบริษัท "
                 "ดู Buffett Indicator ของตลาดรวมด้านล่างแทน")
     else:
         rows, extra = buffett_checks(f)
-        price = info.get("currentPrice") or info.get("regularMarketPrice") or get_quote(b_ticker).get("close")
+        price = current_price(info) or get_quote(b_ticker).get("close")
         shares_out = info.get("sharesOutstanding")
 
         summary = st.container()
         with st.expander("⚙️ สมมติฐานมูลค่าที่แท้จริง (DCF) — ปรับได้", expanded=False):
-            options = []
-            if extra.get("oe_base") is not None:
-                options.append("Owner Earnings (Buffett)")
-            if extra.get("fcf_base") is not None:
-                options.append("Free Cash Flow")
-            if not options:
-                options = ["Free Cash Flow"]
-            if "Owner Earnings (Buffett)" in options and extra["oe_base"] <= 0 and "Free Cash Flow" in options:
-                options.reverse()  # OE ติดลบ ใช้ FCF เป็นค่าเริ่มต้น
+            options = dcf_options(extra)
             basis = st.radio("ฐานกระแสเงินสด", options, horizontal=True, key=f"basis_{b_ticker}")
-            is_oe = basis.startswith("Owner")
-            base = extra.get("oe_base" if is_oe else "fcf_base")
-            default_g = float(min(max(extra.get("oe_cagr" if is_oe else "fcf_cagr", 0.05), 0.0), 0.15))
+            base = extra.get("oe_base" if basis == BASIS_OE else "fcf_base")
+            default_g = default_growth(extra, basis)
             c1, c2, c3 = st.columns(3)
             g = c1.slider("กระแสเงินสดโตปีละ (10 ปีแรก)", 0.0, 0.25,
                           round(round(default_g / 0.005) * 0.005, 3), 0.005, format="%.3f",
@@ -617,37 +404,12 @@ with tab_buffett:
                 "ค่าเริ่มต้นของการเติบโต = CAGR ในอดีต (จำกัด 0–15%) · "
                 "สูตร: PV ของกระแสเงินสด 10 ปี + Terminal value ÷ จำนวนหุ้น · 0.10 = 10%")
 
-        iv = None
-        if base and base > 0 and shares_out and dr > tg:
-            iv = dcf_value(base, g, dr, tg) / shares_out
-        if iv and price:
-            mos = 1 - price / iv
-            rows.append({"หลักเกณฑ์": "ราคาต่ำกว่ามูลค่าที่แท้จริง", "เกณฑ์ผ่าน": "Margin of safety ≥ 25%",
-                         "ค่าจริง": f"ราคา ${price:,.2f} vs มูลค่า ${iv:,.2f} ({mos:+.0%}) · ฐาน {basis}",
-                         "ผล": "✅ ผ่าน" if mos >= 0.25 else "❌ ไม่ผ่าน",
-                         "ทำไมสำคัญ": "ซื้อของดีในราคาที่มีส่วนเผื่อความผิดพลาด", "_s": "pass" if mos >= 0.25 else "fail"})
-        else:
-            mos = None
-            rows.append({"หลักเกณฑ์": "ราคาต่ำกว่ามูลค่าที่แท้จริง", "เกณฑ์ผ่าน": "Margin of safety ≥ 25%",
-                         "ค่าจริง": f"คำนวณไม่ได้ ({basis} ติดลบ/ไม่มีข้อมูล)", "ผล": "➖ N/A",
-                         "ทำไมสำคัญ": "ซื้อของดีในราคาที่มีส่วนเผื่อความผิดพลาด", "_s": "na"})
-
-        # Owner earnings yield เทียบพันธบัตรรัฐบาลสหรัฐ 10 ปี
-        oe_y = None
-        if extra.get("oe_base") is not None and shares_out and price:
-            oe_y = extra["oe_base"] / (shares_out * price)
-            try:
-                tnx = float(get_history("^TNX", "5d", "1d", False)["Close"].iloc[-1]) / 100
-            except Exception:
-                tnx = None
-            if tnx:
-                ok = oe_y >= tnx
-                rows.append({"หลักเกณฑ์": "Owner earnings yield vs พันธบัตร 10 ปี",
-                             "เกณฑ์ผ่าน": "OE yield ≥ ผลตอบแทนพันธบัตร",
-                             "ค่าจริง": f"{oe_y:.1%} vs Treasury 10Y {tnx:.2%}",
-                             "ผล": "✅ ผ่าน" if ok else "❌ ไม่ผ่าน",
-                             "ทำไมสำคัญ": "ถ้าได้น้อยกว่าพันธบัตรที่ไม่มีความเสี่ยง ก็ไม่คุ้มที่จะรับความเสี่ยงหุ้น",
-                             "_s": "pass" if ok else "fail"})
+        try:
+            tnx = float(get_history("^TNX", "5d", "1d", False)["Close"].iloc[-1]) / 100
+        except Exception:
+            tnx = None
+        vrows, iv, mos, oe_y = valuation_rows(extra, price, shares_out, basis, g, dr, tg, tnx)
+        rows += vrows
 
         passed = sum(r["_s"] == "pass" for r in rows)
         applicable = sum(r["_s"] != "na" for r in rows)
@@ -758,3 +520,79 @@ with tab_buffett:
             "(บริษัทมีรายได้ต่างประเทศมากขึ้น ดอกเบี้ยต่ำลง) จึงควรดูประกอบกับค่าเฉลี่ยและ SD")
     except Exception as e:  # noqa: BLE001
         st.warning(f"โหลดข้อมูล Buffett Indicator ไม่สำเร็จ ลองกด Refresh อีกครั้ง ({type(e).__name__})")
+
+
+# ================= Screener (S&P 500) =================
+SCREENER_FILE = Path(__file__).with_name("screener.csv")
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_screener(mtime: float) -> pd.DataFrame:  # mtime: โหลดใหม่เมื่อไฟล์เปลี่ยน
+    return pd.read_csv(SCREENER_FILE)
+
+
+with tab_screener:
+    st.markdown("### 🔍 Buffett Screener — S&P 500")
+    if not SCREENER_FILE.exists():
+        st.info("ยังไม่มีผลคัดกรอง — ไปที่ GitHub repo → แท็บ **Actions** → **Buffett screener (S&P 500)** "
+                "→ **Run workflow** รอประมาณ 30-40 นาที แล้วเปิดหน้านี้ใหม่")
+    else:
+        sc = load_screener(SCREENER_FILE.stat().st_mtime)
+        st.caption(f"อัปเดตล่าสุด {sc['updated'].iloc[0]} · {len(sc)} บริษัท · คำนวณใหม่อัตโนมัติทุกวันเสาร์ · "
+                   "DCF ใช้ค่าเริ่มต้น (discount 10%, terminal 2.5%, growth = CAGR ในอดีต จำกัด 0–15%)")
+
+        c1, c2, c3 = st.columns([1.2, 1.2, 2])
+        min_score = c1.slider("คะแนนขั้นต่ำ (% ข้อที่ผ่าน)", 0, 100, 70, 5, key="sc_min")
+        min_mos = c2.slider("Margin of safety ขั้นต่ำ", -100, 80, 0, 5, format="%d%%", key="sc_mos",
+                            help="0% = ราคาไม่เกินมูลค่าที่แท้จริง · 25% = ตามเกณฑ์ Buffett · ซ้ายสุด = ไม่กรอง")
+        sectors = sorted(sc["sector"].dropna().unique())
+        pick_sec = c3.multiselect("Sector", sectors, key="sc_sector", placeholder="ทุก sector")
+        query = st.text_input("ค้นหาชื่อหรือ symbol", key="sc_q", placeholder="เช่น Apple, KO")
+
+        view = sc[sc["score_pct"] * 100 >= min_score]
+        if min_mos > -100:  # ซ้ายสุด = ไม่กรอง MOS (รวมตัวที่คำนวณ DCF ไม่ได้)
+            view = view[view["margin_of_safety"].fillna(-9) * 100 >= min_mos]
+        if pick_sec:
+            view = view[view["sector"].isin(pick_sec)]
+        if query:
+            q = query.strip().lower()
+            view = view[view["ticker"].str.lower().str.contains(q, regex=False)
+                        | view["name"].str.lower().str.contains(q, regex=False)]
+
+        st.markdown(f"**พบ {len(view)} บริษัท**")
+        pct_cols = ["score_pct", "margin_of_safety", "oe_yield", "roe", "gross_margin", "net_margin"]
+        show = view.copy()
+        show[pct_cols] = show[pct_cols] * 100
+        show["score_txt"] = show["score"].astype(int).astype(str) + "/" + show["applicable"].astype(int).astype(str)
+        show = show[["ticker", "name", "sector", "score_txt", "score_pct", "price", "intrinsic_value",
+                     "margin_of_safety", "oe_yield", "roe", "gross_margin", "net_margin", "debt_years", "failed"]]
+        st.dataframe(
+            show, hide_index=True, width="stretch", height=480,
+            column_config={
+                "ticker": st.column_config.TextColumn("Symbol"),
+                "name": st.column_config.TextColumn("บริษัท"),
+                "sector": st.column_config.TextColumn("Sector"),
+                "score_txt": st.column_config.TextColumn("คะแนน"),
+                "score_pct": st.column_config.ProgressColumn("ผ่าน %", min_value=0, max_value=100, format="%.0f%%"),
+                "price": st.column_config.NumberColumn("ราคา", format="$%.2f"),
+                "intrinsic_value": st.column_config.NumberColumn("มูลค่า DCF", format="$%.2f"),
+                "margin_of_safety": st.column_config.NumberColumn("MOS", format="%.0f%%"),
+                "oe_yield": st.column_config.NumberColumn("OE yield", format="%.1f%%"),
+                "roe": st.column_config.NumberColumn("ROE", format="%.0f%%"),
+                "gross_margin": st.column_config.NumberColumn("Gross M.", format="%.0f%%"),
+                "net_margin": st.column_config.NumberColumn("Net M.", format="%.0f%%"),
+                "debt_years": st.column_config.NumberColumn("หนี้ (ปี)", format="%.1f"),
+                "failed": st.column_config.TextColumn("ข้อที่ไม่ผ่าน", width="large"),
+            },
+        )
+
+        add_pick = st.multiselect("เลือกหุ้นเพื่อเพิ่มเข้า Watchlist แล้วดูรายละเอียดในแท็บ 🎩 Buffett",
+                                  [t for t in view["ticker"] if t not in st.session_state.watchlist],
+                                  key="sc_add")
+        if st.button("➕ เพิ่มเข้า Watchlist", disabled=not add_pick, key="sc_add_btn"):
+            st.session_state.watchlist += add_pick
+            save_watchlist(st.session_state.watchlist)
+            st.toast("เพิ่มเข้า Watchlist แล้ว: " + ", ".join(add_pick), icon="✅")
+            st.rerun()
+        st.caption("ใช้คัดกรองเบื้องต้นเท่านั้น ตัวเลขมาจาก Yahoo Finance อาจคลาดเคลื่อน "
+                   "ควรเปิดดูรายละเอียดในแท็บ 🎩 Buffett ก่อนตัดสินใจ · ไม่ใช่คำแนะนำการลงทุน")

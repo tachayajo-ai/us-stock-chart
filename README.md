@@ -9,6 +9,8 @@
 - Candlestick / Line, Log scale, MA50/MA200, Volume
 - แท็บ **ภาพรวม**: ราคาปิด, % วันนี้, ราคา Pre/After-hours ของทุกตัวใน watchlist
 - แท็บ **เปรียบเทียบ**: Total return (รวมปันผล) หลายตัวบนกราฟเดียว
+- แท็บ **Screener**: คัดกรองหุ้น S&P 500 ด้วย Buffett checklist (GitHub Actions รัน `screener.py` ทุกวันเสาร์ บันทึกผลเป็น `screener.csv`)
+- แท็บ **Buffett**: Buffett checklist รายตัว (ROE, หนี้, margin, FCF, capex, ซื้อหุ้นคืน, DCF + Margin of safety) และ Buffett Indicator ของตลาดรวม (Market cap ÷ GDP จาก FRED)
 
 ## วิธีติดตั้ง (ครั้งแรก)
 1. ติดตั้ง Python 3.10+ จาก https://www.python.org/downloads/
