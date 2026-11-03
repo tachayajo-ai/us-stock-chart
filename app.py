@@ -536,13 +536,16 @@ def buffett_checks(f: dict) -> tuple[list[dict], dict]:
     else:
         add("Capex / กำไรสุทธิ", "≤ 50%", "ไม่มีข้อมูล", "na", "ไม่ต้องลงทุนซ้ำมากเพื่อรักษาธุรกิจ")
 
-    # 8 Share count
+    # 8 Share count (ยอมให้เพิ่มได้ไม่เกิน 1% ตลอดช่วง เช่นจากหุ้นที่ให้พนักงานเล็กน้อย)
     if shares is not None and len(shares) >= 2:
         chg = shares.iloc[-1] / shares.iloc[0] - 1
-        add("จำนวนหุ้นลดลง (ซื้อหุ้นคืน)", "หุ้นไม่เพิ่มขึ้น", f"{chg:+.1%} ({shares.index[0]}–{shares.index[-1]})",
-            "pass" if chg <= 0 else "fail", "ผู้ถือหุ้นเดิมไม่ถูก dilute")
+        add("จำนวนหุ้นไม่เพิ่ม (ไม่ dilute)", "เพิ่มไม่เกิน +1% ทั้งช่วง",
+            f"{chg:+.2%} ({shares.index[0]}: {shares.iloc[0] / 1e6:,.1f}M → "
+            f"{shares.index[-1]}: {shares.iloc[-1] / 1e6:,.1f}M หุ้น)",
+            "pass" if chg <= 0.01 else "fail", "ผู้ถือหุ้นเดิมไม่ถูก dilute · ถ้าลดลงแปลว่าบริษัทซื้อหุ้นคืน")
     else:
-        add("จำนวนหุ้นลดลง (ซื้อหุ้นคืน)", "หุ้นไม่เพิ่มขึ้น", "ไม่มีข้อมูล", "na", "ผู้ถือหุ้นเดิมไม่ถูก dilute")
+        add("จำนวนหุ้นไม่เพิ่ม (ไม่ dilute)", "เพิ่มไม่เกิน +1% ทั้งช่วง", "ไม่มีข้อมูล", "na",
+            "ผู้ถือหุ้นเดิมไม่ถูก dilute")
 
     # ค่าเริ่มต้น DCF
     extra = {"fcf": fcf}
