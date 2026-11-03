@@ -15,7 +15,8 @@ import requests
 import yfinance as yf
 
 from buffett import (build_buffett_indicator, buffett_checks, current_price, dcf_options, default_growth, fetch_fundamentals,
-                     is_company, is_financial, price_to_book, share_count, valuation_rows)
+                     implied_growth, is_company, is_financial, price_to_book, share_count,
+                     valuation_rows)
 
 OUT = Path(__file__).with_name("screener.csv")
 BI_OUT = Path(__file__).with_name("buffett_indicator.csv")
@@ -62,6 +63,8 @@ def screen_one(ticker: str, name: str, sector: str, tnx) -> dict | None:
     g = default_growth(extra, basis)
     vrows, iv, mos, oe_y = valuation_rows(extra, price, shares, basis, g, DISCOUNT, TERMINAL, tnx)
     rows = checks + vrows
+    base = extra.get("oe_base" if basis.startswith("Owner") else "fcf_base")
+    imp_g = None if extra.get("financial") else implied_growth(base, price, shares, DISCOUNT, TERMINAL)
     passed = sum(r["_s"] == "pass" for r in rows)
     applicable = sum(r["_s"] != "na" for r in rows)
     m = extra["metrics"]
@@ -75,7 +78,7 @@ def screen_one(ticker: str, name: str, sector: str, tnx) -> dict | None:
         "oe_yield": oe_y, "roe": m.get("roe"), "gross_margin": m.get("gross_margin"),
         "net_margin": m.get("net_margin"), "debt_years": m.get("debt_years"),
         "capex_to_ni": m.get("capex_to_ni"), "share_change": m.get("share_change"),
-        "dcf_basis": basis, "dcf_growth": g, "financial": financial,
+        "dcf_basis": basis, "dcf_growth": g, "implied_growth": imp_g, "financial": financial,
         "failed": " | ".join(r["หลักเกณฑ์"] for r in rows if r["_s"] == "fail"),
     }
 

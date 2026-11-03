@@ -346,6 +346,26 @@ def valuation_rows(extra: dict, price, shares_out, basis: str, g: float, dr: flo
     return rows, iv, mos, oe_y
 
 
+
+def implied_growth(base, price, shares, dr: float = 0.10, tg: float = 0.025):
+    """อัตราเติบโตต่อปี (10 ปี) ที่ทำให้มูลค่า DCF ต่อหุ้น = ราคาตลาดพอดี
+    บอกว่าราคาปัจจุบัน "คาดหวัง" ให้บริษัทโตเท่าไร · None ถ้าคำนวณไม่ได้"""
+    if not base or base <= 0 or not price or not shares or dr <= tg:
+        return None
+    target = price * shares
+    lo, hi = -0.30, 0.80
+    if dcf_value(base, lo, dr, tg) > target:
+        return lo  # ต่อให้หดตัวหนักก็ยังคุ้ม -> ต่ำกว่า -30%
+    if dcf_value(base, hi, dr, tg) < target:
+        return hi  # ต้องโตเกิน 80%/ปี
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if dcf_value(base, mid, dr, tg) < target:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
 def is_company(f: dict) -> bool:
     qtype = str(f["info"].get("quoteType", "")).upper()
     return qtype not in ("ETF", "MUTUALFUND", "INDEX") and not f["inc"].empty

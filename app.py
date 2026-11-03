@@ -16,9 +16,12 @@ import streamlit as st
 import yfinance as yf
 
 # Streamlit Cloud อัปเดต app.py แต่ไม่โหลด buffett.py ใหม่ -> บังคับโหลดใหม่ กัน ImportError หลังอัปเดตไฟล์
-if "buffett" in sys.modules:
-    importlib.reload(sys.modules["buffett"])
+for _mod in ("buffett", "guides"):
+    if _mod in sys.modules:
+        importlib.reload(sys.modules[_mod])
+import guides  # noqa: E402
 from buffett import (BASIS_OE, buffett_checks, build_buffett_indicator, current_price, dcf_options, default_growth,
+                     implied_growth,
                      fetch_fundamentals, fmt_money, is_company, price_to_book, share_count,
                      valuation_rows)
 
@@ -297,6 +300,8 @@ with tab_chart:
             f"High {df['High'].max():,.2f} · Low {df['Low'].min():,.2f}"
             + (" · แถบสีเทา = Pre-market / After-hours" if prepost else "")
         )
+    with st.expander("📘 วิธีอ่านกราฟ"):
+        st.markdown(guides.CHART)
 
 # ---------------- tab: overview ----------------
 with tab_overview:
@@ -521,9 +526,22 @@ with tab_buffett:
                        "🟡 ผ่านบางส่วน — ดูข้อที่ไม่ผ่านประกอบ" if score >= 0.5 else
                        "🔴 ไม่ค่อยเข้าเกณฑ์ Buffett")
             st.markdown(f"**{verdict}**")
+            if not extra.get("financial"):
+                base_now = extra.get("oe_base" if basis == BASIS_OE else "fcf_base")
+                imp = implied_growth(base_now, price, shares_out, dr, tg)
+                if imp is not None:
+                    note = ("สูงกว่าสมมติฐาน DCF → ราคาคาดหวังการเติบโตสูง" if imp > g + 0.005 else
+                            "ต่ำกว่าสมมติฐาน DCF → ราคาคาดหวังไม่สูง" if imp < g - 0.005 else "ใกล้เคียงสมมติฐาน DCF")
+                    st.caption(f"📐 **ราคาปัจจุบันคาดการณ์ให้ {basis.split(' (')[0]} โต "
+                               f"{'≥ ' if imp >= 0.8 else '≤ ' if imp <= -0.3 else ''}{imp:+.1%} ต่อปี นาน 10 ปี** "
+                               f"(ที่ discount rate {dr:.1%}) · สมมติฐาน DCF ตอนนี้ {g:.1%} — {note}")
 
         table = pd.DataFrame(rows).drop(columns="_s").set_index("หลักเกณฑ์")
         st.dataframe(table, width="stretch")
+        with st.expander("📘 วิธีแปลผล Buffett checklist"):
+            st.markdown(guides.CHECKLIST)
+            if extra.get("financial"):
+                st.markdown(guides.FINANCIAL)
 
         # กราฟงบการเงินรายปี
         figf = go.Figure()
@@ -567,6 +585,8 @@ with tab_buffett:
     bi_view = st.radio("ดูของ", ["ตลาดหุ้นสหรัฐทั้งตลาด", "S&P 500"], horizontal=True, key="bi_view",
                        help="ทั้งตลาด = มูลค่าหุ้นบริษัทนอกภาคการเงินทั้งหมด (Fed Z.1) · "
                             "S&P 500 = มูลค่าตลาดรวมของ 500 บริษัทใหญ่ (รวมธนาคาร/ประกัน)")
+    with st.expander("📘 วิธีแปลผล Buffett Indicator"):
+        st.markdown(guides.INDICATOR)
     try:
         with st.spinner("กำลังโหลดข้อมูล Buffett Indicator…"):
             bi_df, bi_src = load_buffett_indicator(BI_FILE.stat().st_mtime if BI_FILE.exists() else 0.0)
@@ -615,6 +635,9 @@ with tab_screener:
         st.caption(f"อัปเดตล่าสุด {sc['updated'].iloc[0]} · {len(sc)} บริษัท · คำนวณใหม่อัตโนมัติทุกวันเสาร์ · "
                    "DCF ใช้ค่าเริ่มต้น (discount 10%, terminal 2.5%, growth = ต่ำกว่าระหว่าง CAGR กระแสเงินสด/รายได้ จำกัด 0–10%) · "
                    "ธนาคาร/ประกัน/โบรกเกอร์ ไม่คำนวณ DCF/MOS ให้ดู P/B แทน")
+        with st.expander("📘 วิธีใช้และแปลผล Screener"):
+            st.markdown(guides.SCREENER)
+            st.markdown(guides.FINANCIAL)
 
         MOS_OPTS = {"มี Margin of safety (> 0%)": 0, "MOS ≥ 25% (เกณฑ์ Buffett)": 25, "MOS ≥ 50%": 50,
                     "กำหนดเอง": None, "ไม่กรอง MOS": -999}
@@ -668,10 +691,12 @@ with tab_screener:
         show = view.copy()
         show[pct_cols] = show[pct_cols] * 100
         show["score_txt"] = show["score"].astype(int).astype(str) + "/" + show["applicable"].astype(int).astype(str)
-        if "price_to_book" not in show.columns:
-            show["price_to_book"] = None
+        for col in ("price_to_book", "implied_growth"):
+            if col not in show.columns:
+                show[col] = None
+        show["implied_growth"] = pd.to_numeric(show["implied_growth"], errors="coerce") * 100
         show = show[["ticker", "name", "sector", "score_txt", "score_pct", "price", "intrinsic_value",
-                     "margin_of_safety", "price_to_book", "oe_yield", "roe", "gross_margin", "net_margin", "debt_years", "failed"]]
+                     "margin_of_safety", "implied_growth", "price_to_book", "oe_yield", "roe", "gross_margin", "net_margin", "debt_years", "failed"]]
         st.dataframe(
             show, hide_index=True, width="stretch", height=480,
             column_config={
@@ -683,6 +708,9 @@ with tab_screener:
                 "price": st.column_config.NumberColumn("ราคา", format="$%.2f"),
                 "intrinsic_value": st.column_config.NumberColumn("มูลค่า DCF", format="$%.2f"),
                 "margin_of_safety": st.column_config.NumberColumn("MOS", format="%.0f%%"),
+                "implied_growth": st.column_config.NumberColumn(
+                    "โตที่ราคาคาดไว้", format="%.1f%%",
+                    help="อัตราเติบโต/ปี 10 ปี ที่ทำให้มูลค่า DCF = ราคาพอดี · ยิ่งต่ำ ราคายิ่งคาดหวังน้อย"),
                 "price_to_book": st.column_config.NumberColumn("P/B", format="%.2f"),
                 "oe_yield": st.column_config.NumberColumn("OE yield", format="%.1f%%"),
                 "roe": st.column_config.NumberColumn("ROE", format="%.0f%%"),
