@@ -121,6 +121,8 @@ def main():
     topic = os.environ.get("NTFY_TOPIC", "").strip()
     if not topic:
         sys.exit("NTFY_TOPIC is not set (GitHub → Settings → Secrets and variables → Actions)")
+    import hashlib
+    print(f"Topic fingerprint: {hashlib.sha256(topic.encode()).hexdigest()[:12]} (length {len(topic)})")
     if args.test:
         send_ntfy(topic, "✅ ทดสอบแจ้งเตือนหุ้น", "ระบบแจ้งเตือนราคาของ US Stock Chart ทำงานแล้ว",
                   tags=["white_check_mark"], priority=3)
