@@ -367,13 +367,93 @@ BI_FILE = Path(__file__).with_name("buffett_indicator.csv")
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
-def load_buffett_indicator(mtime: float) -> tuple[pd.Series, str]:
+def load_buffett_indicator(mtime: float) -> tuple[pd.DataFrame, str]:
     """ใช้ไฟล์ที่ GitHub Actions บันทึกไว้ทุกสัปดาห์ ถ้ายังไม่มีไฟล์ค่อยดึงสดจาก DBnomics"""
     if BI_FILE.exists():
         df = pd.read_csv(BI_FILE, parse_dates=["date"]).set_index("date")
-        return df["ratio"], "ไฟล์ที่บันทึกทุกสัปดาห์"
-    return build_buffett_indicator(timeout=15, tries=1)["ratio"], "DBnomics (ดึงสด)"
+        return df, "ไฟล์ที่บันทึกทุกสัปดาห์"
+    return build_buffett_indicator(timeout=15, tries=1), "DBnomics (ดึงสด)"
 
+
+
+SCREENER_FILE = Path(__file__).with_name("screener.csv")
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_screener(mtime: float) -> pd.DataFrame:  # mtime: โหลดใหม่เมื่อไฟล์เปลี่ยน
+    return pd.read_csv(SCREENER_FILE)
+
+
+def buffett_zone(v: float) -> str:
+    if v < 75:
+        return "🟢 ถูกมาก (Significantly undervalued)"
+    if v < 90:
+        return "🟢 ค่อนข้างถูก (Modestly undervalued)"
+    if v < 115:
+        return "🟡 ราคาเหมาะสม (Fair value)"
+    if v < 135:
+        return "🟠 ค่อนข้างแพง (Modestly overvalued)"
+    return "🔴 แพงมาก (Significantly overvalued)"
+
+
+def show_indicator(series: pd.Series, est: float, zones: bool, unit: str, color: str,
+                   official: tuple[str, str], caption: str) -> None:
+    pct = (series < est).mean() * 100
+    mean, sd = series.mean(), series.std()
+    k1, k2, k3 = st.columns(3)
+    k1.metric("ประมาณการวันนี้", f"{est:.0f}%", f"{(est - mean) / sd:+.1f} SD จากค่าเฉลี่ย", delta_color="off")
+    k2.metric(official[0], official[1])
+    k3.metric("สูงกว่าในอดีต", f"{pct:.0f}% ของทุก{unit}", help=f"เทียบกับข้อมูลตั้งแต่ {series.index[0]:%Y}")
+    if zones:
+        st.markdown(f"**เกณฑ์ดั้งเดิมของ Buffett: {buffett_zone(est)}**")
+    else:
+        z = (est - mean) / sd
+        lvl = ("🔴 สูงกว่าค่าเฉลี่ยมาก (> +2 SD)" if z > 2 else "🟠 สูงกว่าค่าเฉลี่ย (+1 ถึง +2 SD)" if z > 1
+               else "🟡 ใกล้ค่าเฉลี่ย (±1 SD)" if z >= -1 else "🟢 ต่ำกว่าค่าเฉลี่ย (< −1 SD)")
+        st.markdown(f"**เทียบกับประวัติของตัวเอง: {lvl}**")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=series.index, y=series.values, mode="lines", name="Buffett Indicator",
+                             line=dict(color=color, width=2)))
+    fig.add_trace(go.Scatter(x=[pd.Timestamp.today()], y=[est], mode="markers", name="ประมาณการวันนี้",
+                             marker=dict(color="#ef4444", size=10)))
+    for y, label, dash in ((mean, "ค่าเฉลี่ย", "solid"), (mean + sd, "+1 SD", "dash"),
+                           (mean + 2 * sd, "+2 SD", "dot"), (mean - sd, "-1 SD", "dash")):
+        fig.add_hline(y=y, line_dash=dash, line_color="#94a3b8", opacity=0.7,
+                      annotation_text=f"{label} {y:.0f}%", annotation_position="top left")
+    fig.update_layout(height=420, yaxis_title="% ของ GDP", hovermode="x unified",
+                      margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.05))
+    st.plotly_chart(fig, width="stretch")
+    st.caption(caption)
+
+
+def sp500_indicator(bi_df: pd.DataFrame) -> dict | None:
+    """S&P 500 market cap ÷ GDP
+    - ค่าจริง ณ วันที่ Screener อัปเดต = ผลรวม marketCap ของทุกบริษัทใน S&P 500
+    - ค่าย้อนหลัง/วันนี้ = ค่าจริงนั้น × (ดัชนี ^GSPC ณ เวลานั้น ÷ ดัชนี ณ วันที่อัปเดต)"""
+    if not SCREENER_FILE.exists():
+        return None
+    sc = load_screener(SCREENER_FILE.stat().st_mtime)
+    if "market_cap" not in sc.columns or sc["market_cap"].notna().sum() < 400:
+        return None
+    base = sc["name"].astype(str).str.replace(r"\s*\(Class [A-Z]\)", "", regex=True).str.strip()
+    uniq = sc.assign(_base=base).dropna(subset=["market_cap"]).drop_duplicates("_base")
+    anchor_mcap = float(uniq["market_cap"].sum()) / 1e9  # พันล้าน USD
+    anchor_date = pd.Timestamp(sc["updated"].iloc[0])
+    daily = get_history("^GSPC", "1y", "1d", False)["Close"]
+    daily.index = daily.index.tz_localize(None)
+    at_anchor = daily[daily.index <= anchor_date + pd.Timedelta(days=1)]
+    if at_anchor.empty:
+        return None
+    idx_anchor, idx_now = float(at_anchor.iloc[-1]), float(daily.iloc[-1])
+    monthly = get_history("^GSPC", "max", "1mo", False)["Close"]
+    monthly.index = monthly.index.tz_localize(None)
+    gdp = bi_df["gdp_bn"]
+    monthly = monthly[monthly.index >= gdp.index[0]]
+    gdp_m = gdp.reindex(gdp.index.union(monthly.index)).ffill().reindex(monthly.index)
+    series = anchor_mcap * monthly / idx_anchor / gdp_m * 100
+    return {"series": series.dropna(), "est": anchor_mcap * idx_now / idx_anchor / float(gdp.iloc[-1]) * 100,
+            "anchor_date": f"{anchor_date:%Y-%m-%d}", "anchor_mcap_tn": anchor_mcap / 1000,
+            "gdp_tn": float(gdp.iloc[-1]) / 1000, "n": len(uniq)}
 
 with tab_buffett:
     st.markdown("### 🎩 Buffett checklist รายตัว")
@@ -483,70 +563,48 @@ with tab_buffett:
 
     # ---------- Market Buffett Indicator ----------
     st.divider()
-    st.markdown("### 🇺🇸 Buffett Indicator (มูลค่าตลาดหุ้นรวม ÷ GDP)")
+    st.markdown("### 🇺🇸 Buffett Indicator (มูลค่าตลาดหุ้น ÷ GDP)")
+    bi_view = st.radio("ดูของ", ["ตลาดหุ้นสหรัฐทั้งตลาด", "S&P 500"], horizontal=True, key="bi_view",
+                       help="ทั้งตลาด = มูลค่าหุ้นบริษัทนอกภาคการเงินทั้งหมด (Fed Z.1) · "
+                            "S&P 500 = มูลค่าตลาดรวมของ 500 บริษัทใหญ่ (รวมธนาคาร/ประกัน)")
     try:
         with st.spinner("กำลังโหลดข้อมูล Buffett Indicator…"):
-            bi, bi_src = load_buffett_indicator(BI_FILE.stat().st_mtime if BI_FILE.exists() else 0.0)
-        last_date = bi.index[-1]
-        q_end = last_date + pd.offsets.QuarterEnd(0)
-        vti = get_history("VTI", "2y", "1d", False)["Close"]
-        vti.index = vti.index.tz_localize(None)
-        at_qend = vti[vti.index <= q_end]
-        est = float(bi.iloc[-1] * vti.iloc[-1] / at_qend.iloc[-1]) if len(at_qend) else float(bi.iloc[-1])
-        pct = (bi < est).mean() * 100
-        mean, sd = bi.mean(), bi.std()
-
-        if est < 75:
-            zone = "🟢 ถูกมาก (Significantly undervalued)"
-        elif est < 90:
-            zone = "🟢 ค่อนข้างถูก (Modestly undervalued)"
-        elif est < 115:
-            zone = "🟡 ราคาเหมาะสม (Fair value)"
-        elif est < 135:
-            zone = "🟠 ค่อนข้างแพง (Modestly overvalued)"
+            bi_df, bi_src = load_buffett_indicator(BI_FILE.stat().st_mtime if BI_FILE.exists() else 0.0)
+        if bi_view == "S&P 500":
+            sp = sp500_indicator(bi_df)
+            if sp is None:
+                st.info("ต้องใช้ข้อมูลมูลค่าตลาดจาก Screener รอบใหม่ — รอรอบอัตโนมัติวันเสาร์ "
+                        "หรือกด Run workflow ใน GitHub Actions")
+            else:
+                show_indicator(
+                    sp["series"], sp["est"], zones=False, unit="เดือน", color="#a855f7",
+                    official=(f"มูลค่าตลาด S&P 500 ({sp['anchor_date']})", f"${sp['anchor_mcap_tn']:,.1f}T"),
+                    caption=(f"มูลค่าตลาดรวม {sp['n']} บริษัทใน S&P 500 จาก Screener วันที่ {sp['anchor_date']} "
+                             f"(หุ้นหลาย class นับครั้งเดียว) ÷ GDP ล่าสุด ${sp['gdp_tn']:,.1f}T · "
+                             "ค่าย้อนหลังประมาณจากระดับดัชนี S&P 500 (^GSPC) รายเดือน เทียบกับวันที่มีมูลค่าจริง "
+                             "จึงคลาดเคลื่อนได้ช่วงที่ห่างจากปัจจุบันมาก · ไม่มีเกณฑ์ 75/90/115/135% "
+                             "เพราะเกณฑ์นั้นทำไว้สำหรับตลาดรวม ให้เทียบกับค่าเฉลี่ยและ SD ของตัวเองแทน"))
         else:
-            zone = "🔴 แพงมาก (Significantly overvalued)"
-
-        k1, k2, k3 = st.columns(3)
-        k1.metric("ประมาณการปัจจุบัน", f"{est:.0f}%",
-                  f"{est - bi.iloc[-1]:+.0f} จุด จากไตรมาสล่าสุด", delta_color="off")
-        k2.metric(f"ข้อมูลทางการล่าสุด ({q_end:%b %Y})", f"{bi.iloc[-1]:.0f}%")
-        k3.metric("สูงกว่าประวัติศาสตร์", f"{pct:.0f}% ของทุกไตรมาส",
-                  help=f"เทียบกับข้อมูลตั้งแต่ {bi.index[0]:%Y}")
-        st.markdown(f"**เกณฑ์ดั้งเดิมของ Buffett: {zone}**")
-
-        figb = go.Figure()
-        figb.add_trace(go.Scatter(x=bi.index, y=bi.values, mode="lines", name="Buffett Indicator",
-                                  line=dict(color="#3b82f6", width=2)))
-        figb.add_trace(go.Scatter(x=[pd.Timestamp.today()], y=[est], mode="markers", name="ประมาณการวันนี้",
-                                  marker=dict(color="#ef4444", size=10)))
-        for y, label, dash in ((mean, "ค่าเฉลี่ย", "solid"), (mean + sd, "+1 SD", "dash"),
-                               (mean + 2 * sd, "+2 SD", "dot"), (mean - sd, "-1 SD", "dash")):
-            figb.add_hline(y=y, line_dash=dash, line_color="#94a3b8", opacity=0.7,
-                           annotation_text=f"{label} {y:.0f}%", annotation_position="top left")
-        figb.update_layout(height=420, yaxis_title="% ของ GDP", hovermode="x unified",
-                           margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.05))
-        st.plotly_chart(figb, width="stretch")
-        st.caption(
-            f"ข้อมูลจาก{bi_src} · ที่มา: Federal Reserve Z.1 มูลค่าหุ้นบริษัทนอกภาคการเงิน (FL103164105) ÷ GDP ของ BEA "
-            "ผ่าน DBnomics · ข้อมูลรายไตรมาส "
-            "ประกาศช้า ~3 เดือน ค่าปัจจุบันจึงประมาณจากการเปลี่ยนแปลงราคา VTI (ทั้งตลาด) หลังสิ้นไตรมาส · "
-            "เกณฑ์ 75/90/115/135% มาจาก Buffett ปี 2001 แต่ค่านี้มีแนวโน้มสูงขึ้นตามเวลา "
-            "(บริษัทมีรายได้ต่างประเทศมากขึ้น ดอกเบี้ยต่ำลง) จึงควรดูประกอบกับค่าเฉลี่ยและ SD")
+            bi = bi_df["ratio"]
+            q_end = bi.index[-1] + pd.offsets.QuarterEnd(0)
+            vti = get_history("VTI", "2y", "1d", False)["Close"]
+            vti.index = vti.index.tz_localize(None)
+            at_qend = vti[vti.index <= q_end]
+            est = float(bi.iloc[-1] * vti.iloc[-1] / at_qend.iloc[-1]) if len(at_qend) else float(bi.iloc[-1])
+            show_indicator(
+                bi, est, zones=True, unit="ไตรมาส", color="#3b82f6",
+                official=(f"ข้อมูลทางการล่าสุด ({q_end:%b %Y})", f"{bi.iloc[-1]:.0f}%"),
+                caption=(f"ข้อมูลจาก{bi_src} · ที่มา: Federal Reserve Z.1 มูลค่าหุ้นบริษัทนอกภาคการเงิน (FL103164105) "
+                         "÷ GDP ของ BEA ผ่าน DBnomics · ข้อมูลรายไตรมาส ประกาศช้า ~3 เดือน "
+                         "ค่าปัจจุบันจึงประมาณจากการเปลี่ยนแปลงราคา VTI (ทั้งตลาด) หลังสิ้นไตรมาส · "
+                         "เกณฑ์ 75/90/115/135% มาจาก Buffett ปี 2001 แต่ค่านี้มีแนวโน้มสูงขึ้นตามเวลา "
+                         "(บริษัทมีรายได้ต่างประเทศมากขึ้น ดอกเบี้ยต่ำลง) จึงควรดูประกอบกับค่าเฉลี่ยและ SD"))
     except Exception as e:  # noqa: BLE001
         st.warning(f"โหลดข้อมูล Buffett Indicator ไม่สำเร็จ ({type(e).__name__}) — ไปที่ GitHub → Actions → "
                    "Run workflow เพื่อบันทึกข้อมูลลง repo แล้วรอ 15 นาที")
 
 
 # ================= Screener (S&P 500) =================
-SCREENER_FILE = Path(__file__).with_name("screener.csv")
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def load_screener(mtime: float) -> pd.DataFrame:  # mtime: โหลดใหม่เมื่อไฟล์เปลี่ยน
-    return pd.read_csv(SCREENER_FILE)
-
-
 with tab_screener:
     st.markdown("### 🔍 Buffett Screener — S&P 500")
     if not SCREENER_FILE.exists():
@@ -558,27 +616,54 @@ with tab_screener:
                    "DCF ใช้ค่าเริ่มต้น (discount 10%, terminal 2.5%, growth = ต่ำกว่าระหว่าง CAGR กระแสเงินสด/รายได้ จำกัด 0–10%) · "
                    "ธนาคาร/ประกัน/โบรกเกอร์ ไม่คำนวณ DCF/MOS ให้ดู P/B แทน")
 
-        c1, c2, c3 = st.columns([1.2, 1.2, 2])
+        MOS_OPTS = {"มี Margin of safety (> 0%)": 0, "MOS ≥ 25% (เกณฑ์ Buffett)": 25, "MOS ≥ 50%": 50,
+                    "กำหนดเอง": None, "ไม่กรอง MOS": -999}
+        c1, c2, c3 = st.columns([1.2, 1.4, 2])
         min_score = c1.slider("คะแนนขั้นต่ำ (% ข้อที่ผ่าน)", 0, 100, 70, 5, key="sc_min")
-        min_mos = c2.slider("Margin of safety ขั้นต่ำ", -100, 80, 0, 5, format="%d%%", key="sc_mos",
-                            help="0% = ราคาไม่เกินมูลค่าที่แท้จริง · 25% = ตามเกณฑ์ Buffett · ซ้ายสุด = ไม่กรอง")
+        mos_opt = c2.selectbox("Margin of safety", list(MOS_OPTS), index=0, key="sc_mos_opt",
+                               help="MOS = (มูลค่าที่แท้จริง − ราคา) ÷ มูลค่าที่แท้จริง · "
+                                    "Buffett ต้องการอย่างน้อย 25% เผื่อความผิดพลาดของการประเมิน")
+        min_mos = MOS_OPTS[mos_opt]
+        if min_mos is None:
+            min_mos = c2.slider("MOS ขั้นต่ำ", -100, 90, 10, 5, format="%d%%", key="sc_mos")
         sectors = sorted(sc["sector"].dropna().unique())
         pick_sec = c3.multiselect("Sector", sectors, key="sc_sector", placeholder="ทุก sector")
-        query = st.text_input("ค้นหาชื่อหรือ symbol", key="sc_q", placeholder="เช่น Apple, KO")
+        c4, c5, c6 = st.columns([1.2, 1.4, 2])
+        sort_by = c4.selectbox("เรียงตาม", ["MOS มากสุด", "คะแนนสูงสุด", "OE yield สูงสุด", "P/B ต่ำสุด"],
+                               key="sc_sort")
+        incl_fin = c5.checkbox("รวมธนาคาร/ประกัน (ไม่มี MOS)", value=False, key="sc_fin",
+                               help="หุ้นกลุ่มการเงินไม่คำนวณ DCF จึงไม่มี MOS · เลือกเพื่อแสดงโดยดู P/B แทน")
+        query = c6.text_input("ค้นหาชื่อหรือ symbol", key="sc_q", placeholder="เช่น Apple, KO")
 
+        fin = (sc["financial"].astype(str).str.lower() == "true") if "financial" in sc.columns \
+            else (sc["sector"] == "Financials")
         view = sc[sc["score_pct"] * 100 >= min_score]
-        if min_mos > -100:  # ซ้ายสุด = ไม่กรอง MOS (รวมตัวที่คำนวณ DCF ไม่ได้)
-            fin = (view["financial"].astype(str).str.lower() == "true") if "financial" in view.columns \
-                else (view["sector"] == "Financials")
-            view = view[(view["margin_of_safety"].fillna(-9) * 100 >= min_mos) | fin]  # การเงินไม่มี MOS ไม่ตัดออก
+        if min_mos > -999:
+            mos_ok = view["margin_of_safety"] * 100 > min_mos if min_mos == 0 \
+                else view["margin_of_safety"] * 100 >= min_mos
+            view = view[mos_ok.fillna(False) | (fin.reindex(view.index) & incl_fin)]
+        elif not incl_fin:
+            view = view[~fin.reindex(view.index)]
         if pick_sec:
             view = view[view["sector"].isin(pick_sec)]
         if query:
             q = query.strip().lower()
             view = view[view["ticker"].str.lower().str.contains(q, regex=False)
                         | view["name"].str.lower().str.contains(q, regex=False)]
+        sort_map = {"MOS มากสุด": (["margin_of_safety", "score_pct"], [False, False]),
+                    "คะแนนสูงสุด": (["score_pct", "margin_of_safety"], [False, False]),
+                    "OE yield สูงสุด": (["oe_yield"], [False]),
+                    "P/B ต่ำสุด": (["price_to_book"], [True])}
+        cols, asc = sort_map[sort_by]
+        if all(c in view.columns for c in cols):
+            view = view.sort_values(cols, ascending=asc, na_position="last")
 
-        st.markdown(f"**พบ {len(view)} บริษัท**")
+        n_mos = int((view["margin_of_safety"] > 0).sum())
+        med = view["margin_of_safety"].median()
+        s1, s2, s3 = st.columns(3)
+        s1.metric("พบ", f"{len(view)} บริษัท")
+        s2.metric("มี MOS > 0%", f"{n_mos} บริษัท")
+        s3.metric("MOS กลาง (median)", f"{med:+.0%}" if pd.notna(med) else "—")
         pct_cols = ["score_pct", "margin_of_safety", "oe_yield", "roe", "gross_margin", "net_margin"]
         show = view.copy()
         show[pct_cols] = show[pct_cols] * 100
