@@ -16,7 +16,7 @@ import streamlit as st
 import yfinance as yf
 
 # Streamlit Cloud อัปเดต app.py แต่ไม่โหลด buffett.py ใหม่ -> บังคับโหลดใหม่ กัน ImportError หลังอัปเดตไฟล์
-for _mod in ("buffett", "guides", "company", "alerts", "portfolio", "ui", "ai_analyst"):
+for _mod in ("buffett", "guides", "company", "alerts", "portfolio", "ui"):
     if _mod in sys.modules:
         importlib.reload(sys.modules[_mod])
 import guides  # noqa: E402
@@ -24,7 +24,6 @@ from company import earnings_links, fetch_earnings, fetch_news, translate, trans
 import alerts as alerts_mod  # noqa: E402
 import portfolio as pf  # noqa: E402
 import ui  # noqa: E402
-import ai_analyst  # noqa: E402
 from buffett import (BASIS_OE, buffett_checks, build_buffett_indicator, current_price, dcf_options, default_growth,
                      implied_growth,
                      fetch_fundamentals, fmt_money, is_company, price_to_book, share_count,
@@ -615,83 +614,6 @@ def analyst_package(ticker, f, rows, extra, price, iv, mos, passed, applicable,
     return "\n".join(x for x in lines if x is not None)
 
 
-def esc_dollar(s: str) -> str:
-    """$ สองตัวในข้อความ Markdown ถูกตีความเป็นสูตรคณิตศาสตร์ → escape ให้แสดงเป็นเครื่องหมายดอลลาร์"""
-    return str(s).replace("\\$", "$").replace("$", "\\$")  # กัน escape ซ้ำกับ md_safe
-
-
-def md_safe(s: str) -> str:
-    """กัน $ ถูกตีความเป็นสูตร และ [ ] ทำลิงก์เพี้ยน"""
-    return str(s).replace("$", "\\$").replace("[", "(").replace("]", ")")
-
-
-def anthropic_key():
-    try:
-        return st.secrets["ANTHROPIC_API_KEY"]
-    except Exception:
-        return None
-
-
-def load_ai_reports() -> dict:
-    if "ai_reports" not in st.session_state:
-        st.session_state.ai_reports = read_repo_json("ai_reports.json") or {}
-    return st.session_state.ai_reports
-
-
-def ai_section(ticker: str, package: str):
-    """ปุ่มส่งให้ Claude วิเคราะห์ + แสดงรายงานล่าสุดที่บันทึกไว้ + กล่องคัดลอกแบบเดิม"""
-    reports = load_ai_reports()
-    key = anthropic_key()
-    if key:
-        st.caption("กดปุ่มด้านล่าง → แอพส่งตัวเลขชุดนี้ให้ Claude Opus 5.5 วิเคราะห์ด้วย skill stock-analyst "
-                   "(ค้นเว็บหา 10-K, earnings call, ข่าวเพิ่มเอง) · ใช้เวลาประมาณ 3–8 นาที "
-                   "· ค่าใช้จ่ายประมาณ 0.5–2 USD ต่อครั้ง (ตัดจากเครดิต Claude API) · ระหว่างรอห้ามปิดหรือรีเฟรชหน้า")
-        if st.button(f"🧠 ให้ Claude วิเคราะห์ {ticker}" + (" ใหม่" if ticker in reports else ""),
-                     key=f"ai_run_{ticker}", type="primary"):
-            live = st.empty()
-            last = [0.0]
-
-            def show(text):
-                now = pd.Timestamp.now().timestamp()
-                if now - last[0] > 0.7:  # ไม่วาดใหม่ทุกตัวอักษร
-                    last[0] = now
-                    live.markdown(esc_dollar(text) + " ▌")
-
-            with st.status(f"Claude กำลังวิเคราะห์ {ticker}… (ค้นข้อมูล + เขียนรายงาน)", expanded=False) as status:
-                try:
-                    res = ai_analyst.analyze(key, package, on_text=show)
-                except Exception as e:  # noqa: BLE001
-                    status.update(label="วิเคราะห์ไม่สำเร็จ", state="error")
-                    live.empty()
-                    st.error(f"เรียก Claude ไม่สำเร็จ: {type(e).__name__}: {e}")
-                    return
-                status.update(label=f"เสร็จแล้ว · ค่าใช้จ่ายประมาณ {res['cost_usd']:.2f} USD", state="complete")
-            live.empty()
-            res["date"] = f"{pd.Timestamp.now(tz='Asia/Bangkok'):%Y-%m-%d %H:%M}"
-            reports[ticker] = res
-            if write_repo_json("ai_reports.json", reports, f"AI analysis report: {ticker}"):
-                st.toast(f"บันทึกรายงาน {ticker} แล้ว — เปิดดูใหม่ได้ภายหลัง", icon="🧠")
-    else:
-        st.info("ยังไม่ได้ตั้งค่า **ANTHROPIC_API_KEY** — ปุ่มวิเคราะห์อัตโนมัติจะขึ้นเมื่อใส่คีย์ใน "
-                "share.streamlit.io → แอพ → ⋮ → Settings → Secrets (ดูคู่มือหัวข้อ 4) "
-                "· ระหว่างนี้ใช้วิธีคัดลอกด้านล่างไปวางใน Claude ได้")
-    rep = reports.get(ticker)
-    if rep:
-        st.markdown(f"#### 📄 รายงาน AI ล่าสุดของ {ticker}")
-        st.caption(f"วิเคราะห์เมื่อ {rep.get('date', '-')} · {rep.get('model', '')} · ค้นเว็บ "
-                   f"{rep.get('searches', 0)} ครั้ง · ค่าใช้จ่ายประมาณ {rep.get('cost_usd', 0):.2f} USD "
-                   "· ตัวเลขในรายงานควรตรวจกับแหล่งที่มาก่อนตัดสินใจ")
-        with st.container(border=True):
-            st.markdown(esc_dollar(rep["text"]))
-        st.download_button("⬇️ ดาวน์โหลดรายงาน (.md)", rep["text"].encode("utf-8"),
-                           file_name=f"{ticker}_AI_{rep.get('date', '')[:10]}.md", mime="text/markdown",
-                           key=f"ai_dl_{ticker}")
-    with st.expander("📋 หรือคัดลอกข้อมูลไปวางใน Claude เอง (ฟรีตามแพ็กเกจ claude.ai)"):
-        st.caption("กดไอคอนคัดลอกที่มุมขวาบนของกล่อง → เปิด Claude → วาง")
-        st.code(package, language=None, wrap_lines=True)
-        st.markdown("[เปิด Claude ↗](https://claude.ai/new)")
-
-
 with tab_buffett:
     st.markdown("### 🎩 Buffett checklist รายตัว")
     b_ticker = st.selectbox("เลือกหุ้น", wl, index=wl.index(st.session_state.selected), key="buffett_ticker")
@@ -774,12 +696,15 @@ with tab_buffett:
             st.markdown(guides.CHECKLIST)
             if extra.get("financial"):
                 st.markdown(guides.FINANCIAL)
-        with st.expander("🤖 นักวิเคราะห์ AI (Claude Opus 5.5 + skill stock-analyst)"):
-            package = analyst_package(b_ticker, f, rows, extra, price, iv, mos, passed, applicable,
-                                      basis, g, dr, tg, tnx,
-                                      implied_growth(extra.get("oe_base" if basis == BASIS_OE else "fcf_base"),
-                                                     price, shares_out, dr, tg))
-            ai_section(b_ticker, package)
+        with st.expander("🤖 ส่งข้อมูลให้นักวิเคราะห์ AI (Claude)"):
+            st.caption("กดไอคอนคัดลอกที่มุมขวาบนของกล่องด้านล่าง → เปิด Claude (แชทใหม่หรือใน Project) → วาง "
+                       "· Claude จะใช้ skill stock-analyst วิเคราะห์โดยใช้ตัวเลขชุดนี้ร่วมกับข้อมูลที่ค้นเพิ่มเอง")
+            st.code(analyst_package(b_ticker, f, rows, extra, price, iv, mos, passed, applicable,
+                                    basis, g, dr, tg, tnx,
+                                    implied_growth(extra.get("oe_base" if basis == BASIS_OE else "fcf_base"),
+                                                   price, shares_out, dr, tg)),
+                    language=None, wrap_lines=True)
+            st.markdown("[เปิด Claude ↗](https://claude.ai/new)")
         if iv and not extra.get("financial"):
             q_target = iv * 0.75
             if st.button(f"🔔 แจ้งเตือนเมื่อ MOS ถึง 25% (ราคา ≤ ${q_target:,.2f}) ด้วยสมมติฐาน DCF ตอนนี้",
@@ -1007,6 +932,16 @@ def get_news(ticker: str, name: str) -> list[dict]:
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def get_earnings(ticker: str) -> dict:
     return fetch_earnings(ticker)
+
+
+def esc_dollar(s: str) -> str:
+    """$ สองตัวในข้อความ Markdown ถูกตีความเป็นสูตรคณิตศาสตร์ → escape ให้แสดงเป็นเครื่องหมายดอลลาร์"""
+    return str(s).replace("\\$", "$").replace("$", "\\$")  # กัน escape ซ้ำกับ md_safe
+
+
+def md_safe(s: str) -> str:
+    """กัน $ ถูกตีความเป็นสูตร และ [ ] ทำลิงก์เพี้ยน"""
+    return str(s).replace("$", "\\$").replace("[", "(").replace("]", ")")
 
 
 with tab_company:
