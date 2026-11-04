@@ -8,5 +8,15 @@
     "mos": null,
     "note": "แนวรับถัดไป 190",
     "created": "2026-11-04"
+  },
+  {
+    "id": "66db0a9108",
+    "ticker": "TSM",
+    "kind": "below",
+    "target": 300.0,
+    "iv": null,
+    "mos": null,
+    "note": "น่าเข้าลงทุน",
+    "created": "2026-11-04"
   }
 ]
