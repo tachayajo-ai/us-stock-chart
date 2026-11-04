@@ -228,7 +228,8 @@ with st.sidebar:
         c1, c2 = st.columns([4, 1])
         if c1.button(t, key=f"sel_{t}", width="stretch"):
             st.session_state.selected = t
-        if c2.button("✕", key=f"del_{t}", help=f"ลบ {t}"):
+        if c2.button("✕", key=f"del_{t}", help=f"ลบ {t}" if len(st.session_state.watchlist) > 1
+                     else "ต้องมีอย่างน้อย 1 ตัว", disabled=len(st.session_state.watchlist) <= 1):
             st.session_state.watchlist.remove(t)
             save_watchlist(st.session_state.watchlist)
             if st.session_state.get("selected") == t:
