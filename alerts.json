@@ -1,1 +1,12 @@
-[]
+[
+  {
+    "id": "3911bf19b4",
+    "ticker": "GOOGL",
+    "kind": "below",
+    "target": 240.0,
+    "iv": null,
+    "mos": null,
+    "note": "แนวรับถัดไป 190",
+    "created": "2026-11-04"
+  }
+]
