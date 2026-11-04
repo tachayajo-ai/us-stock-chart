@@ -131,7 +131,8 @@ def value_history(txs: list[dict], closes: dict[str, pd.Series], bench: pd.Serie
         return pd.DataFrame()
     px = pd.DataFrame({tk: s.reindex(idx).ffill() for tk, s in closes.items()})
     shares = pd.DataFrame(0.0, index=idx, columns=px.columns)
-    flow = pd.Series(0.0, index=idx)
+    flow = pd.Series(0.0, index=idx)        # เงินจริงที่จ่าย/ได้รับ (ราคาที่ซื้อขายจริง + ค่าธรรมเนียม)
+    bench_flow = pd.Series(0.0, index=idx)  # มูลค่าหุ้นที่ซื้อ/ขาย ณ ราคาปิดของวันนั้น
     for t in _sorted(txs):
         d = pd.Timestamp(t["date"])
         on = idx[idx >= d]
@@ -142,10 +143,14 @@ def value_history(txs: list[dict], closes: dict[str, pd.Series], bench: pd.Serie
             shares.loc[on, t["ticker"]] += sign * t["shares"]
         amount = t["shares"] * t["price"] + (t["fee"] if sign > 0 else -t["fee"])
         flow.loc[on[0]] += sign * amount
+        close = px.at[on[0], t["ticker"]] if t["ticker"] in px.columns else None
+        bench_flow.loc[on[0]] += sign * (t["shares"] * close if close is not None and pd.notna(close) else amount)
     out = pd.DataFrame({"value": (shares.clip(lower=0) * px).sum(axis=1), "invested": flow.cumsum()})
     if bench is not None and not bench.empty:
         b = bench.reindex(idx).ffill().bfill()
-        units = (flow / b).cumsum()  # ซื้อ/ขาย SPY ด้วยจำนวนเงินเท่ากันในวันเดียวกัน
+        # ซื้อ/ขาย SPY ด้วยมูลค่าเท่ากับหุ้นที่ซื้อขาย ณ ราคาปิดวันเดียวกัน → ทั้งสองเส้นเริ่มจุดเดียวกัน
+        # เทียบผลงาน "หลังซื้อ" อย่างยุติธรรม (ส่วนต่างราคาซื้อจริงกับราคาปิดดูได้จากเส้นเงินลงทุน)
+        units = (bench_flow / b).cumsum()
         out["benchmark"] = units * b
     return out
 

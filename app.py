@@ -857,6 +857,11 @@ def get_earnings(ticker: str) -> dict:
     return fetch_earnings(ticker)
 
 
+def esc_dollar(s: str) -> str:
+    """$ สองตัวในข้อความ Markdown ถูกตีความเป็นสูตรคณิตศาสตร์ → escape ให้แสดงเป็นเครื่องหมายดอลลาร์"""
+    return str(s).replace("\\$", "$").replace("$", "\\$")  # กัน escape ซ้ำกับ md_safe
+
+
 def md_safe(s: str) -> str:
     """กัน $ ถูกตีความเป็นสูตร และ [ ] ทำลิงก์เพี้ยน"""
     return str(s).replace("$", "\\$").replace("[", "(").replace("]", ")")
@@ -1039,9 +1044,9 @@ with tab_alerts:
             else:
                 status = "⏳ รอ"
             c1, c2, c3 = st.columns([5, 1.2, 1])
-            c1.markdown(f"**{item['ticker']}** · {alerts_mod.describe(item)}  \n"
+            c1.markdown(esc_dollar(f"**{item['ticker']}** · {alerts_mod.describe(item)}  \n"
                         f"ราคาล่าสุด {'$' + format(p, ',.2f') if p else '—'} · {status}"
-                        + (f"  \n📝 {md_safe(item['note'])}" if item.get("note") else ""))
+                        + (f"  \n📝 {md_safe(item['note'])}" if item.get("note") else "")))
             if done and c2.button("🔁 ตั้งใหม่", key=f"al_rearm_{item['id']}", help="เปิดให้เตือนอีกครั้ง"):
                 al[i] = dict(item, id=alerts_mod.new_alert(item["ticker"], "below", 1)["id"])
                 if save_alerts():
@@ -1311,10 +1316,11 @@ with tab_port:
                 if "benchmark" in vh and vh["benchmark"].iloc[-1]:
                     pv, bv = float(vh["value"].iloc[-1]), float(vh["benchmark"].iloc[-1])
                     diff = pv - bv
-                    st.markdown(f"**เทียบกับ S&P 500:** พอร์ต ${pv:,.2f} vs ถ้าซื้อ SPY แทน ${bv:,.2f} → "
+                    st.markdown(esc_dollar(f"**เทียบกับ S&P 500:** พอร์ต ${pv:,.2f} vs ถ้าซื้อ SPY แทน ${bv:,.2f} → "
                                 + (f"🟢 **ชนะตลาด ${diff:,.2f}** ({pv / bv - 1:+.1%})" if diff >= 0
                                    else f"🔴 **แพ้ตลาด ${-diff:,.2f}** ({pv / bv - 1:+.1%})")
-                                + f" · ตั้งแต่ {vh.index[0]:%d/%m/%Y}")
+                                + f" · ตั้งแต่ {vh.index[0]:%d/%m/%Y} (เริ่มเทียบจากราคาปิดวันที่ซื้อ)"))
+                st.markdown("**มูลค่าพอร์ตเทียบเงินลงทุนและ S&P 500**")
                 fig_v = go.Figure()
                 fig_v.add_trace(go.Scatter(x=vh.index, y=vh["value"], name="มูลค่าพอร์ต", line=dict(color="#3b82f6", width=2)))
                 fig_v.add_trace(go.Scatter(x=vh.index, y=vh["invested"], name="เงินลงทุนสุทธิ",
@@ -1322,11 +1328,13 @@ with tab_port:
                 if "benchmark" in vh:
                     fig_v.add_trace(go.Scatter(x=vh.index, y=vh["benchmark"], name="ถ้าซื้อ S&P 500 (SPY) แทน",
                                                line=dict(color="#f97316", width=1.5)))
-                fig_v.update_layout(height=380, hovermode="x unified", margin=dict(l=10, r=10, t=30, b=10),
-                                    title="มูลค่าพอร์ตเทียบเงินลงทุนและ S&P 500", yaxis_title="USD",
-                                    legend=dict(orientation="h", y=1.12))
+                fig_v.update_layout(height=380, hovermode="x unified", margin=dict(l=10, r=10, t=10, b=10),
+                                    yaxis_title="USD", legend=dict(orientation="h", y=-0.15))
+                fig_v.update_xaxes(tickformat="%d/%m/%y", hoverformat="%d/%m/%Y",
+                                   dtick=86400000 if (vh.index[-1] - vh.index[0]).days <= 14 else None)
                 st.plotly_chart(fig_v, width="stretch")
-                st.caption("เส้นส้ม = ถ้านำเงินจำนวนเดียวกันไปซื้อ/ขาย SPY ในวันเดียวกัน · ทั้งสองเส้นไม่รวมปันผล")
+                st.caption("เส้นส้ม = ถ้าซื้อ/ขาย SPY แทนในวันเดียวกัน ด้วยมูลค่าเท่ากัน (คิดจากราคาปิดของวันนั้น ทั้งสองเส้นจึงเริ่มจุดเดียวกัน) "
+                           "· เส้นประ = เงินที่จ่ายจริง ถ้าซื้อระหว่างวันแพงกว่าราคาปิด เส้นประจะอยู่สูงกว่าตั้งแต่วันแรก · ไม่รวมปันผล")
         elif txs:
             st.info("ขายหุ้นออกหมดแล้ว — ดูกำไรที่ขายแล้วด้านบน")
         else:
@@ -1374,11 +1382,11 @@ with tab_port:
                 owner = {t["id"]: p["name"] for p in ports for t in p["txs"]}
                 for t in sorted(txs, key=lambda x: (x["date"], x.get("created", "")), reverse=True):
                     c1, c2, c3 = st.columns([6, 1, 1])
-                    c1.markdown(f"{t['date']} · **{'🟢 ซื้อ' if t['kind'] == 'buy' else '🔴 ขาย'} {t['ticker']}** "
+                    c1.markdown(esc_dollar(f"{t['date']} · **{'🟢 ซื้อ' if t['kind'] == 'buy' else '🔴 ขาย'} {t['ticker']}** "
                                 + (f"[{md_safe(owner.get(t['id'], ''))}] " if combined else "")
                                 + f"{t['shares']:g} หุ้น @ ${t['price']:,.2f}"
                                 + (f" · ค่าธรรมเนียม ${t['fee']:,.2f}" if t["fee"] else "")
-                                + (f"  \n📝 {md_safe(t['note'])}" if t.get("note") else ""))
+                                + (f"  \n📝 {md_safe(t['note'])}" if t.get("note") else "")))
                     if combined:
                         continue
                     if c2.button("✏️", key=f"tx_edit_{t['id']}", help="แก้ไขรายการนี้"):
@@ -1460,5 +1468,5 @@ with tab_port:
 # ================= คู่มือ =================
 with tab_manual:
     manual = Path(__file__).with_name("MANUAL.md")
-    st.markdown(manual.read_text(encoding="utf-8") if manual.exists() else "ไม่พบไฟล์คู่มือ (MANUAL.md)")
+    st.markdown(esc_dollar(manual.read_text(encoding="utf-8")) if manual.exists() else "ไม่พบไฟล์คู่มือ (MANUAL.md)")
 
