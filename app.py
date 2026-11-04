@@ -1082,6 +1082,34 @@ def close_on(ticker: str, d) -> float | None:
     return float(h["Close"].iloc[-1]) if not h.empty else None
 
 
+TH_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
+
+
+def date_picker(container, key: str):
+    """เลือกวันที่ด้วย วัน/เดือน/ปี (ใช้แทน st.date_input ที่โหลดไม่ขึ้นบน Streamlit Cloud บางเวอร์ชัน)"""
+    import calendar
+    today = pd.Timestamp.now().date()
+    container.markdown("วันที่")
+    d1, d2, d3 = container.columns([1, 1.2, 1.3])
+    years = list(range(today.year, today.year - 31, -1))
+    y = d3.selectbox("ปี", years, index=0, key=f"{key}_y", label_visibility="collapsed",
+                     format_func=lambda v: f"{v} ({v + 543})")
+    months = list(range(1, 13)) if y < today.year else list(range(1, today.month + 1))
+    m_default = months.index(today.month) if today.month in months else len(months) - 1
+    if st.session_state.get(f"{key}_m") not in months:
+        st.session_state.pop(f"{key}_m", None)
+    m = d2.selectbox("เดือน", months, index=m_default, key=f"{key}_m", label_visibility="collapsed",
+                     format_func=lambda v: TH_MONTHS[v - 1])
+    last = calendar.monthrange(y, m)[1]
+    if (y, m) == (today.year, today.month):
+        last = today.day
+    days = list(range(1, last + 1))
+    if st.session_state.get(f"{key}_d") not in days:
+        st.session_state.pop(f"{key}_d", None)
+    d = d1.selectbox("วัน", days, index=min(today.day, last) - 1, key=f"{key}_d", label_visibility="collapsed")
+    return pd.Timestamp(y, m, d).date()
+
+
 def save_portfolio() -> bool:
     return write_repo_json(PORT_FILE, pf.encrypt(st.session_state.port_data, st.session_state.port_pw),
                            "Update portfolio (encrypted)")
@@ -1231,7 +1259,10 @@ with tab_port:
                         r["MOS %"] = srow["margin_of_safety"] * 100
                     r["คะแนน Buffett"] = f"{int(srow['score'])}/{int(srow['applicable'])}"
                 rows_h.append(r)
-            st.dataframe(pd.DataFrame(rows_h), hide_index=True, width="stretch", column_config={
+            hold_df = pd.DataFrame(rows_h)
+            for col in ("ราคาล่าสุด", "สัดส่วน %", "กำไร/ขาดทุน %", "วันนี้ %", "MOS %"):
+                hold_df[col] = pd.to_numeric(hold_df[col], errors="coerce")
+            st.dataframe(hold_df, hide_index=True, width="stretch", column_config={
                 "หุ้น": st.column_config.NumberColumn(format="%g"),
                 "ต้นทุนเฉลี่ย": st.column_config.NumberColumn(format="$%.2f"),
                 "ราคาล่าสุด": st.column_config.NumberColumn(format="$%.2f"),
@@ -1251,11 +1282,16 @@ with tab_port:
             g1.plotly_chart(fig_a, width="stretch")
             sect = {}
             for r in rows_h:
-                try:
-                    inf = get_fundamentals(r["Symbol"])["info"]
-                    s_name = inf.get("sector") or ("ETF/กองทุน" if str(inf.get("quoteType", "")).upper() == "ETF" else "อื่นๆ")
-                except Exception:
-                    s_name = "อื่นๆ"
+                s_name = None
+                if sc_map is not None and r["Symbol"] in sc_map.index:
+                    s_name = sc_map.loc[r["Symbol"]].get("sector")  # GICS จาก Screener
+                if not isinstance(s_name, str) or not s_name:
+                    try:
+                        inf = get_fundamentals(r["Symbol"])["info"]
+                        s_name = inf.get("sector") or (
+                            "ETF/กองทุน" if str(inf.get("quoteType", "")).upper() in ("ETF", "MUTUALFUND") else "อื่นๆ")
+                    except Exception:
+                        s_name = "อื่นๆ"
                 sect[s_name] = sect.get(s_name, 0) + r["มูลค่า"]
             fig_s = go.Figure(go.Pie(labels=list(sect), values=list(sect.values()), hole=0.5, textinfo="label+percent"))
             fig_s.update_layout(height=320, margin=dict(l=10, r=10, t=30, b=10), title="สัดส่วนตาม Sector", showlegend=False)
@@ -1292,8 +1328,7 @@ with tab_port:
           else:
             c1, c2, c3 = st.columns(3)
             t_kind = c1.radio("ประเภท", ["ซื้อ", "ขาย"], horizontal=True, key="tx_kind")
-            t_date = c2.date_input("วันที่", value=pd.Timestamp.now().date(), key="tx_date",
-                                   max_value=pd.Timestamp.now().date())
+            t_date = date_picker(c2, "tx")
             opts = sorted(set(wl) | set(pos))
             t_tk = c3.selectbox("หุ้น", opts + ["อื่นๆ (พิมพ์เอง)"], key="tx_tk")
             if t_tk == "อื่นๆ (พิมพ์เอง)":
