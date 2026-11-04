@@ -4,3 +4,4 @@ plotly>=5.24
 pandas>=2.2
 requests>=2.31
 cryptography>=42
+anthropic>=2.4

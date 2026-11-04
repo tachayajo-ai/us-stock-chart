@@ -20,12 +20,13 @@ Notes for Claude sessions working on this repo. The user-facing Thai manual is `
 | `buffett.py` | Fundamentals fetch, Buffett checklist, Owner Earnings (OCF − SBC − maintenance capex, Greenwald), DCF, implied growth, financials detection, P/B, share count, Buffett Indicator |
 | `screener.py` | S&P 500 screen (Wikipedia list) → `screener.csv` |
 | `company.py` | Google Translate (free gtx endpoint; optional `GOOGLE_TRANSLATE_API_KEY`), news (Yahoo → Google News RSS), earnings |
+| `ai_analyst.py` | Buffett tab 🧠 button: Claude API (`claude-opus-5-5`, adaptive thinking, web search, fallbacks) with SKILL.md + all references as cached system prompt; secret `ANTHROPIC_API_KEY`; reports saved to `ai_reports.json` |
 | `alerts.py` | Alert model + checker + ntfy JSON publish |
 | `portfolio.py` | Transactions, average cost, P/L, dividends (15% Thai withholding), value vs SPY, Fernet+PBKDF2 encryption, multi-portfolio `{"portfolios":[...]}` |
 | `guides.py` | 📘 interpretation texts shown in the app |
 | `ui.py` | CSS (dark broker style) + hero/chips HTML; `.streamlit/config.toml` theme |
 | `ai-analyst/` | Claude Skill `stock-analyst` (SKILL.md + 13 references) and its zip |
-| data | `watchlist.json`, `alerts.json`, `alerts_state.json`, `screener.csv`, `buffett_indicator.csv`, `portfolio.enc.json` (encrypted; password only the user knows) |
+| data | `watchlist.json`, `alerts.json`, `alerts_state.json`, `screener.csv`, `buffett_indicator.csv`, `ai_reports.json` (latest AI report per ticker), `portfolio.enc.json` (encrypted; password only the user knows) |
 
 ## Gotchas (learned the hard way)
 - Streamlit Cloud does not reload imported modules after a push → `app.py` reloads `buffett, guides, company, alerts, portfolio, ui` via `importlib.reload`. Add new modules to that list.
