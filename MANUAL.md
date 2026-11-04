@@ -131,6 +131,7 @@
 | อาการ | วิธีแก้ |
 |---|---|
 | เปิดแอพแล้วเจอ "Yes, get this app back up" | แอพหลับเพราะไม่มีคนใช้หลายวัน — กดปุ่มแล้วรอ ~30 วินาที |
+| ช่องต่างๆ ขึ้นกรอบแดง "Failed to fetch dynamically imported module" | หน้าเว็บเปิดค้างจากก่อนอัปเดต — **รีเฟรชหน้า** (หรือปิดแท็บแล้วเปิดใหม่) |
 | แอพขึ้น error สีแดง (เช่น ImportError) หลังอัปเดต | share.streamlit.io → Manage app → ⋮ → **Reboot app** |
 | ราคา/กราฟไม่ขึ้น | Yahoo Finance ขัดข้องชั่วคราว — กด 🔄 Refresh ข้อมูล ในแถบซ้าย หรือรอสักครู่ |
 | "บันทึก ... ไม่สำเร็จ (GitHub 401/403)" | Token ถูกลบหรือหมดสิทธิ์ — สร้าง token ใหม่ (Contents: Read and write, เลือก repo `us-stock-chart`) แล้วแก้ใน Streamlit Secrets |
