@@ -16,13 +16,14 @@ import streamlit as st
 import yfinance as yf
 
 # Streamlit Cloud อัปเดต app.py แต่ไม่โหลด buffett.py ใหม่ -> บังคับโหลดใหม่ กัน ImportError หลังอัปเดตไฟล์
-for _mod in ("buffett", "guides", "company", "alerts", "portfolio"):
+for _mod in ("buffett", "guides", "company", "alerts", "portfolio", "ui"):
     if _mod in sys.modules:
         importlib.reload(sys.modules[_mod])
 import guides  # noqa: E402
 from company import earnings_links, fetch_earnings, fetch_news, translate, translate_lines  # noqa: E402
 import alerts as alerts_mod  # noqa: E402
 import portfolio as pf  # noqa: E402
+import ui  # noqa: E402
 from buffett import (BASIS_OE, buffett_checks, build_buffett_indicator, current_price, dcf_options, default_growth,
                      implied_growth,
                      fetch_fundamentals, fmt_money, is_company, price_to_book, share_count,
@@ -46,6 +47,7 @@ TIMEFRAMES = {
 }
 
 st.set_page_config(page_title="US Stock Chart", page_icon="📈", layout="wide")
+st.markdown(ui.CSS, unsafe_allow_html=True)
 
 
 # ---------------- watchlist ----------------
@@ -191,12 +193,35 @@ def get_quote(ticker: str) -> dict:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_name(ticker: str) -> str:
+def get_info(ticker: str) -> dict:
     try:
-        info = yf.Ticker(ticker).info
-        return info.get("shortName") or info.get("longName") or ticker
+        return yf.Ticker(ticker).info or {}
     except Exception:
-        return ticker
+        return {}
+
+
+def get_name(ticker: str) -> str:
+    info = get_info(ticker)
+    return info.get("shortName") or info.get("longName") or ticker
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def watch_quotes(tickers: tuple[str, ...]) -> dict:
+    """ราคาล่าสุดและ % เปลี่ยนแปลงวันนี้ของทั้ง watchlist (ดึงครั้งเดียวทั้งชุด)"""
+    out = {}
+    try:
+        df = yf.download(list(tickers), period="5d", interval="1d", group_by="ticker",
+                         progress=False, auto_adjust=False, threads=True)
+    except Exception:
+        return out
+    for t in tickers:
+        try:
+            c = (df[t]["Close"] if isinstance(df.columns, pd.MultiIndex) else df["Close"]).dropna()
+            if len(c) >= 2:
+                out[t] = (float(c.iloc[-1]), (float(c.iloc[-1]) / float(c.iloc[-2]) - 1) * 100)
+        except Exception:
+            continue
+    return out
 
 
 def ticker_exists(ticker: str) -> bool:
@@ -224,11 +249,20 @@ with st.sidebar:
             if bad:
                 st.error("ไม่พบ symbol: " + ", ".join(bad))
 
+    wq = watch_quotes(tuple(st.session_state.watchlist))
     for t in list(st.session_state.watchlist):
-        c1, c2 = st.columns([4, 1])
-        if c1.button(t, key=f"sel_{t}", width="stretch"):
+        c1, c2 = st.columns([5, 1], vertical_alignment="center")
+        if t in wq:
+            px_, pc_ = wq[t]
+            color = "green" if pc_ > 0 else "red" if pc_ < 0 else "gray"
+            label = f"**{t}** ${px_:,.2f} :{color}[{'▲' if pc_ > 0 else '▼' if pc_ < 0 else '•'}{abs(pc_):.2f}%]"
+        else:
+            label = f"**{t}**"
+        if c1.button(label, key=f"sel_{t}", width="stretch",
+                     type="primary" if st.session_state.get("selected") == t else "secondary"):
             st.session_state.selected = t
-        if c2.button("✕", key=f"del_{t}", help=f"ลบ {t}" if len(st.session_state.watchlist) > 1
+            st.rerun()
+        if c2.button("", icon=":material/close:", key=f"del_{t}", help=f"ลบ {t}" if len(st.session_state.watchlist) > 1
                      else "ต้องมีอย่างน้อย 1 ตัว", disabled=len(st.session_state.watchlist) <= 1):
             st.session_state.watchlist.remove(t)
             save_watchlist(st.session_state.watchlist)
@@ -284,40 +318,31 @@ with tab_chart:
     ticker = st.session_state.selected
     q = get_quote(ticker)
 
-    st.subheader(f"{ticker} · {get_name(ticker)}")
-    m1, m2, m3 = st.columns(3)
-    if "close" in q:
-        m1.metric(f"ปิดตลาด ({q['close_date']})", f"${q['close']:,.2f}",
-                  f"{q['chg_pct']:+.2f}%" if "chg_pct" in q else None)
-    if "ext_price" in q:
-        m2.metric(f"{q['ext_label']} ({q['ext_time']:%H:%M} ET)", f"${q['ext_price']:,.2f}",
-                  f"{q['ext_chg_pct']:+.2f}%" if "ext_chg_pct" in q else None)
-    else:
-        m2.metric("Pre / After-hours", "—")
-    m3.caption("ข้อมูลจาก Yahoo Finance (delay ~15 นาทีช่วงตลาดเปิด) · เวลาเป็น ET")
-
     try:
         daily_all = get_history(ticker, "max", "1d", False)["Close"]
     except Exception:
         daily_all = pd.Series(dtype=float)
     perf = period_changes(daily_all)
-    if perf:
-        order = [k for k in TIMEFRAMES if k in perf]
-        strip = pd.DataFrame({k: [f"{perf[k]['pct']:+.2f}%", f"{perf[k]['chg']:+,.2f}"] for k in order},
-                             index=["% เปลี่ยนแปลง", "ราคา +/- ($)"])
-
-        def _color(v):
-            return "color:#16a34a" if str(v).startswith("+") else "color:#dc2626" if str(v).startswith("-") else ""
-
-        st.dataframe(strip.style.map(_color), width="stretch")
-        st.caption("เทียบราคาปิดล่าสุดกับราคาปิดต้นช่วง (1D = เทียบวันก่อน · YTD = เทียบสิ้นปีที่แล้ว · "
-                   "Max = ตั้งแต่เริ่มซื้อขาย) · เป็นราคาอย่างเดียว ไม่รวมปันผล")
+    info_c = get_info(ticker)
+    day = perf.get("1D")
+    ext = (f"{q['ext_label']} {q['ext_time']:%H:%M}", q["ext_price"], q.get("ext_chg_pct")) if "ext_price" in q else None
+    st.markdown(ui.hero(ticker, info_c.get("longName") or get_name(ticker),
+                        day["end"] if day else q.get("close"), day["chg"] if day else None,
+                        day["pct"] if day else q.get("chg_pct"),
+                        ui.logo_url(info_c.get("website")),
+                        sub=(f"ราคาปิด {q['close_date']} · " if "close_date" in q else "")
+                        + "Yahoo Finance (delay ~15 นาที) · เวลา ET", ext=ext), unsafe_allow_html=True)
 
     c1, c2, c3, c4 = st.columns([5, 1.4, 1.2, 1.4])
     tf = c1.radio("ช่วงเวลา", list(TIMEFRAMES), index=0, horizontal=True)
     style = c2.radio("แบบกราฟ", ["Candle", "Line"], horizontal=True)
     log = c3.toggle("Log scale", value=tf in ("10Y", "Max"))
     show_ma = c4.toggle("MA 50/200", value=tf in ("1Y", "5Y"))
+
+    if perf:
+        st.markdown(ui.chips(perf, [k for k in TIMEFRAMES if k in perf], tf), unsafe_allow_html=True)
+        st.caption("ผลตอบแทนแต่ละช่วง: ราคาปิดล่าสุดเทียบราคาปิดต้นช่วง (1D = เทียบวันก่อน · YTD = เทียบสิ้นปีที่แล้ว) "
+                   "· ราคาอย่างเดียว ไม่รวมปันผล")
 
     period, interval, prepost = TIMEFRAMES[tf]
     with st.spinner("กำลังโหลดข้อมูล…"):
