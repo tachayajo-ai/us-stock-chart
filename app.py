@@ -252,6 +252,34 @@ if st.session_state.get("selected") not in wl:
                         "🔔 แจ้งเตือน", "💼 พอร์ต", "📖 คู่มือ"])
 
 # ---------------- tab: chart ----------------
+def period_changes(close: pd.Series) -> dict:
+    """การเปลี่ยนแปลงของราคาปิดรายวันในแต่ละช่วง → {ช่วง: {since, start, end, chg, pct}}"""
+    s = close.dropna()
+    if len(s) < 2:
+        return {}
+    end, last_dt = float(s.iloc[-1]), s.index[-1]
+
+    def at_or_before(ts):
+        sub = s[s.index <= ts]
+        return (sub.index[-1], float(sub.iloc[-1])) if len(sub) else None
+
+    base = {"1D": (s.index[-2], float(s.iloc[-2]))}
+    if len(s) >= 6:
+        base["5D"] = (s.index[-6], float(s.iloc[-6]))
+    for label, off in (("1M", pd.DateOffset(months=1)), ("6M", pd.DateOffset(months=6)),
+                       ("1Y", pd.DateOffset(years=1)), ("5Y", pd.DateOffset(years=5)),
+                       ("10Y", pd.DateOffset(years=10))):
+        target = last_dt - off
+        if s.index[0] <= target:
+            base[label] = at_or_before(target)
+    ye = pd.Timestamp(last_dt.year - 1, 12, 31, 23, 59, tz=last_dt.tz)
+    if s.index[0] <= ye:
+        base["YTD"] = at_or_before(ye)
+    base["Max"] = (s.index[0], float(s.iloc[0]))
+    return {k: {"since": d, "start": p, "end": end, "chg": end - p, "pct": (end / p - 1) * 100}
+            for k, (d, p) in ((k, v) for k, v in base.items() if v) if p}
+
+
 with tab_chart:
     ticker = st.session_state.selected
     q = get_quote(ticker)
@@ -268,6 +296,23 @@ with tab_chart:
         m2.metric("Pre / After-hours", "—")
     m3.caption("ข้อมูลจาก Yahoo Finance (delay ~15 นาทีช่วงตลาดเปิด) · เวลาเป็น ET")
 
+    try:
+        daily_all = get_history(ticker, "max", "1d", False)["Close"]
+    except Exception:
+        daily_all = pd.Series(dtype=float)
+    perf = period_changes(daily_all)
+    if perf:
+        order = [k for k in TIMEFRAMES if k in perf]
+        strip = pd.DataFrame({k: [f"{perf[k]['pct']:+.2f}%", f"{perf[k]['chg']:+,.2f}"] for k in order},
+                             index=["% เปลี่ยนแปลง", "ราคา +/- ($)"])
+
+        def _color(v):
+            return "color:#16a34a" if str(v).startswith("+") else "color:#dc2626" if str(v).startswith("-") else ""
+
+        st.dataframe(strip.style.map(_color), width="stretch")
+        st.caption("เทียบราคาปิดล่าสุดกับราคาปิดต้นช่วง (1D = เทียบวันก่อน · YTD = เทียบสิ้นปีที่แล้ว · "
+                   "Max = ตั้งแต่เริ่มซื้อขาย) · เป็นราคาอย่างเดียว ไม่รวมปันผล")
+
     c1, c2, c3, c4 = st.columns([5, 1.4, 1.2, 1.4])
     tf = c1.radio("ช่วงเวลา", list(TIMEFRAMES), index=0, horizontal=True)
     style = c2.radio("แบบกราฟ", ["Candle", "Line"], horizontal=True)
@@ -281,6 +326,16 @@ with tab_chart:
     if df.empty:
         st.warning("ไม่มีข้อมูลสำหรับช่วงเวลานี้")
     else:
+        sel = perf.get(tf)
+        h1, h2, h3 = st.columns(3)
+        if sel:
+            h1.metric(f"ช่วง {tf} (ตั้งแต่ {sel['since']:%d/%m/%Y})", f"${sel['chg']:+,.2f}", f"{sel['pct']:+.2f}%")
+        else:
+            first_c = float(df["Close"].iloc[0])
+            h1.metric(f"ช่วง {tf}", f"${float(df['Close'].iloc[-1]) - first_c:+,.2f}",
+                      f"{(float(df['Close'].iloc[-1]) / first_c - 1) * 100:+.2f}%")
+        h2.metric("สูงสุดในช่วง", f"${df['High'].max():,.2f}")
+        h3.metric("ต่ำสุดในช่วง", f"${df['Low'].min():,.2f}")
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                             row_heights=[0.78, 0.22], vertical_spacing=0.03)
         if style == "Candle":
@@ -326,12 +381,9 @@ with tab_chart:
         st.plotly_chart(fig, width="stretch",
                         config={"scrollZoom": True, "displaylogo": False})
 
-        first, last = df["Close"].iloc[0], df["Close"].iloc[-1]
         st.caption(
-            f"{tf}: {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M} · "
-            f"เปลี่ยนแปลง {(last / first - 1) * 100:+.2f}% · "
-            f"High {df['High'].max():,.2f} · Low {df['Low'].min():,.2f}"
-            + (" · แถบสีเทา = Pre-market / After-hours" if prepost else "")
+            f"กราฟ {tf}: {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M} ET"
+            + (" · แถบสีเทา = Pre-market / After-hours (การเปลี่ยนแปลงด้านบนคิดจากราคาปิดปกติ)" if prepost else "")
         )
     with st.expander("📘 วิธีอ่านกราฟ"):
         st.markdown(guides.CHART)
