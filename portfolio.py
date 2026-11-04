@@ -189,3 +189,14 @@ def normalize(data) -> dict:
     if isinstance(data, dict) and isinstance(data.get("portfolios"), list):
         return data
     raise ValueError("รูปแบบข้อมูลพอร์ตไม่ถูกต้อง")
+
+
+def validate_all(txs: list[dict]) -> str | None:
+    """ตรวจทั้งพอร์ตว่าไม่มีจุดไหนขายเกินจำนวนที่ถือ (ใช้หลังแก้ไข/ลบรายการ)"""
+    held: dict[str, float] = {}
+    for t in _sorted(txs):
+        held[t["ticker"]] = held.get(t["ticker"], 0.0) + (t["shares"] if t["kind"] == "buy" else -t["shares"])
+        if held[t["ticker"]] < -1e-9:
+            return (f"รายการขาย {t['ticker']} วันที่ {t['date']} จะเกินจำนวนที่ถือ "
+                    f"(ขาด {-held[t['ticker']]:g} หุ้น) — แก้/ลบรายการขายนั้นก่อน")
+    return None

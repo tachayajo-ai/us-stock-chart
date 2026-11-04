@@ -1085,17 +1085,19 @@ def close_on(ticker: str, d) -> float | None:
 TH_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
 
 
-def date_picker(container, key: str):
+def date_picker(container, key: str, default=None):
     """เลือกวันที่ด้วย วัน/เดือน/ปี (ใช้แทน st.date_input ที่โหลดไม่ขึ้นบน Streamlit Cloud บางเวอร์ชัน)"""
     import calendar
     today = pd.Timestamp.now().date()
+    base = pd.Timestamp(default).date() if default is not None else today
     container.markdown("วันที่")
     d1, d2, d3 = container.columns([1, 1.2, 1.3])
     years = list(range(today.year, today.year - 31, -1))
-    y = d3.selectbox("ปี", years, index=0, key=f"{key}_y", label_visibility="collapsed",
+    y = d3.selectbox("ปี", years, index=years.index(base.year) if base.year in years else 0, key=f"{key}_y",
+                     label_visibility="collapsed",
                      format_func=lambda v: f"{v} ({v + 543})")
     months = list(range(1, 13)) if y < today.year else list(range(1, today.month + 1))
-    m_default = months.index(today.month) if today.month in months else len(months) - 1
+    m_default = months.index(base.month) if base.month in months else len(months) - 1
     if st.session_state.get(f"{key}_m") not in months:
         st.session_state.pop(f"{key}_m", None)
     m = d2.selectbox("เดือน", months, index=m_default, key=f"{key}_m", label_visibility="collapsed",
@@ -1106,7 +1108,7 @@ def date_picker(container, key: str):
     days = list(range(1, last + 1))
     if st.session_state.get(f"{key}_d") not in days:
         st.session_state.pop(f"{key}_d", None)
-    d = d1.selectbox("วัน", days, index=min(today.day, last) - 1, key=f"{key}_d", label_visibility="collapsed")
+    d = d1.selectbox("วัน", days, index=min(base.day, last) - 1, key=f"{key}_d", label_visibility="collapsed")
     return pd.Timestamp(y, m, d).date()
 
 
@@ -1302,7 +1304,17 @@ with tab_port:
             except Exception:
                 spy = None
             vh = pf.value_history(txs, {tk: h["Close"] for tk, h in hist.items() if not h.empty}, spy)
-            if not vh.empty:
+            if vh.empty or len(vh) < 2:
+                st.info("📈 กราฟเทียบกับ S&P 500 จะแสดงเมื่อมีราคาหลังวันที่ซื้ออย่างน้อย 2 วันทำการ "
+                        "— ถ้าเพิ่งซื้อ รอวันทำการถัดไป · ถ้าลงวันที่ผิดเป็นวันนี้ ให้แก้วันที่ในประวัติรายการ (✏️)")
+            else:
+                if "benchmark" in vh and vh["benchmark"].iloc[-1]:
+                    pv, bv = float(vh["value"].iloc[-1]), float(vh["benchmark"].iloc[-1])
+                    diff = pv - bv
+                    st.markdown(f"**เทียบกับ S&P 500:** พอร์ต ${pv:,.2f} vs ถ้าซื้อ SPY แทน ${bv:,.2f} → "
+                                + (f"🟢 **ชนะตลาด ${diff:,.2f}** ({pv / bv - 1:+.1%})" if diff >= 0
+                                   else f"🔴 **แพ้ตลาด ${-diff:,.2f}** ({pv / bv - 1:+.1%})")
+                                + f" · ตั้งแต่ {vh.index[0]:%d/%m/%Y}")
                 fig_v = go.Figure()
                 fig_v.add_trace(go.Scatter(x=vh.index, y=vh["value"], name="มูลค่าพอร์ต", line=dict(color="#3b82f6", width=2)))
                 fig_v.add_trace(go.Scatter(x=vh.index, y=vh["invested"], name="เงินลงทุนสุทธิ",
@@ -1361,22 +1373,57 @@ with tab_port:
             with st.expander(f"📜 ประวัติรายการ ({len(txs)})"):
                 owner = {t["id"]: p["name"] for p in ports for t in p["txs"]}
                 for t in sorted(txs, key=lambda x: (x["date"], x.get("created", "")), reverse=True):
-                    c1, c2 = st.columns([6, 1])
+                    c1, c2, c3 = st.columns([6, 1, 1])
                     c1.markdown(f"{t['date']} · **{'🟢 ซื้อ' if t['kind'] == 'buy' else '🔴 ขาย'} {t['ticker']}** "
                                 + (f"[{md_safe(owner.get(t['id'], ''))}] " if combined else "")
                                 + f"{t['shares']:g} หุ้น @ ${t['price']:,.2f}"
                                 + (f" · ค่าธรรมเนียม ${t['fee']:,.2f}" if t["fee"] else "")
                                 + (f"  \n📝 {md_safe(t['note'])}" if t.get("note") else ""))
-                    if not combined and c2.button("🗑️", key=f"tx_del_{t['id']}", help="ลบรายการนี้"):
+                    if combined:
+                        continue
+                    if c2.button("✏️", key=f"tx_edit_{t['id']}", help="แก้ไขรายการนี้"):
+                        st.session_state.tx_editing = None if st.session_state.get("tx_editing") == t["id"] else t["id"]
+                        st.rerun()
+                    if c3.button("🗑️", key=f"tx_del_{t['id']}", help="ลบรายการนี้"):
                         remaining = [x for x in txs if x["id"] != t["id"]]
-                        bad = next((pf.validate_sell([y for y in remaining if y["id"] != s["id"]], s)
-                                    for s in remaining if s["kind"] == "sell"
-                                    and pf.validate_sell([y for y in remaining if y["id"] != s["id"]], s)), None)
-                        if bad:
-                            st.error("ลบไม่ได้: จะทำให้รายการขายภายหลังเกินจำนวนที่ถือ — ลบรายการขายก่อน")
+                        err = pf.validate_all(remaining)
+                        if err:
+                            st.error("ลบไม่ได้: " + err)
                         else:
                             cur["txs"] = remaining
                             if save_portfolio():
+                                st.rerun()
+                    if st.session_state.get("tx_editing") == t["id"]:
+                        with st.container(border=True):
+                            st.markdown(f"**แก้ไขรายการ {t['ticker']}**")
+                            e1, e2 = st.columns(2)
+                            e_kind = e1.radio("ประเภท", ["ซื้อ", "ขาย"], index=0 if t["kind"] == "buy" else 1,
+                                              horizontal=True, key=f"ed_kind_{t['id']}")
+                            e_date = date_picker(e2, f"ed_{t['id']}", default=t["date"])
+                            e3, e4, e5 = st.columns(3)
+                            e_sh = e3.number_input("จำนวนหุ้น", min_value=0.0, value=float(t["shares"]), step=1.0,
+                                                   format="%g", key=f"ed_sh_{t['id']}")
+                            e_px = e4.number_input("ราคาต่อหุ้น ($)", min_value=0.0, value=float(t["price"]), step=0.01,
+                                                   format="%.2f", key=f"ed_px_{t['id']}")
+                            e_fee = e5.number_input("ค่าธรรมเนียม ($)", min_value=0.0, value=float(t["fee"]), step=0.01,
+                                                    format="%.2f", key=f"ed_fee_{t['id']}")
+                            e_note = st.text_input("บันทึก", value=t.get("note", ""), key=f"ed_note_{t['id']}")
+                            s1, s2 = st.columns(2)
+                            if s1.button("💾 บันทึกการแก้ไข", key=f"ed_save_{t['id']}", disabled=not (e_sh > 0 and e_px > 0)):
+                                edited = dict(t, kind="buy" if e_kind == "ซื้อ" else "sell", date=str(e_date),
+                                              shares=float(e_sh), price=float(e_px), fee=float(e_fee), note=e_note.strip())
+                                new_txs = [edited if x["id"] == t["id"] else x for x in txs]
+                                err = pf.validate_all(new_txs)
+                                if err:
+                                    st.error(err)
+                                else:
+                                    cur["txs"] = new_txs
+                                    st.session_state.tx_editing = None
+                                    if save_portfolio():
+                                        st.toast("แก้ไขรายการแล้ว", icon="✏️")
+                                        st.rerun()
+                            if s2.button("ยกเลิก", key=f"ed_cancel_{t['id']}"):
+                                st.session_state.tx_editing = None
                                 st.rerun()
             if div_total and not divs.empty:
                 with st.expander(f"💵 ปันผลที่ควรได้รับ ({len(divs)} ครั้ง)"):
