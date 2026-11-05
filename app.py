@@ -231,6 +231,36 @@ def ticker_exists(ticker: str) -> bool:
         return False
 
 
+def esc_dollar(s: str) -> str:
+    """$ สองตัวในข้อความ Markdown ถูกตีความเป็นสูตรคณิตศาสตร์ → escape ให้แสดงเป็นเครื่องหมายดอลลาร์"""
+    return str(s).replace("\\$", "$").replace("$", "\\$")  # กัน escape ซ้ำกับ md_safe
+
+
+def md_safe(s: str) -> str:
+    """กัน $ ถูกตีความเป็นสูตร และ [ ] ทำลิงก์เพี้ยน"""
+    return str(s).replace("$", "\\$").replace("[", "(").replace("]", ")")
+
+
+FOREIGN_SUFFIXES = (".L", ".AS", ".DE", ".SW", ".MI", ".PA")  # ลอนดอน อัมสเตอร์ดัม Xetra สวิส มิลาน ปารีส
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def suggest_symbols(query: str) -> list[tuple[str, str]]:
+    """หา symbol ที่ใกล้เคียงเมื่อพิมพ์แล้วไม่เจอ (เช่น ETF ยุโรปต้องมี suffix ตลาด: VHYA → VHYA.L)
+    → [(symbol, คำอธิบาย)]"""
+    out: list[tuple[str, str]] = []
+    try:
+        for q in yf.Search(query, max_results=8).quotes:
+            sym = q.get("symbol")
+            if sym and q.get("quoteType") in ("EQUITY", "ETF", "MUTUALFUND", "INDEX"):
+                out.append((sym, f"{q.get('longname') or q.get('shortname') or ''} · {q.get('exchDisp', '')}"))
+    except Exception:
+        pass
+    if not out:  # Yahoo search ใช้ไม่ได้ → ลอง suffix ตลาดยุโรปที่พบบ่อย
+        out = [(query + sfx, "") for sfx in FOREIGN_SUFFIXES if ticker_exists(query + sfx)]
+    return out[:6]
+
+
 # ---------------- เลือกหุ้น (ใช้ร่วมกันทุกแท็บ) ----------------
 wl = st.session_state.watchlist
 if not wl:
@@ -260,7 +290,7 @@ def quote_label(t: str) -> str:
 with tab_watch:
     with st.form("add", clear_on_submit=True):
         fc1, fc2 = st.columns([4, 1], vertical_alignment="bottom")
-        new = fc1.text_input("เพิ่มหุ้น / ETF", placeholder="เช่น TSLA, SCHD, BRK-B")
+        new = fc1.text_input("เพิ่มหุ้น / ETF", placeholder="เช่น TSLA, SCHD, BRK-B, VHYA.L")
         if fc2.form_submit_button("➕ เพิ่ม", width="stretch"):
             added, bad = [], []
             for t in [x.strip().upper() for x in new.replace(" ", ",").split(",") if x.strip()]:
@@ -271,8 +301,23 @@ with tab_watch:
                 st.session_state.watchlist += added
                 save_watchlist(st.session_state.watchlist)
                 st.success("เพิ่มแล้ว: " + ", ".join(added) + " — เลือกดูได้ที่แท็บ 📈 Data")
-            if bad:
-                st.error("ไม่พบ symbol: " + ", ".join(bad))
+            st.session_state.wl_suggest = {b: suggest_symbols(b) for b in bad}
+
+    def add_symbol(sym: str) -> None:
+        if sym not in st.session_state.watchlist:
+            st.session_state.watchlist.append(sym)
+            save_watchlist(st.session_state.watchlist)
+        st.session_state.wl_suggest = {}
+        st.toast(f"เพิ่ม {sym} แล้ว", icon="✅")
+
+    for b, cands in st.session_state.get("wl_suggest", {}).items():
+        if not cands:
+            st.error(f"ไม่พบ symbol: {b} — หุ้น/ETF นอกสหรัฐต้องใส่ชื่อตลาดต่อท้าย เช่น `.L` (ลอนดอน), `.DE` (เยอรมนี)")
+            continue
+        st.warning(f"ไม่พบ {b} ในตลาดสหรัฐ — หมายถึงตัวนี้ไหม? แตะเพื่อเพิ่ม")
+        for sym, desc in cands:
+            st.button(f"➕ **{sym}**  {md_safe(desc)}", key=f"sug_{b}_{sym}", on_click=add_symbol, args=(sym,),
+                      width="stretch")
 
     st.caption("กดชื่อหุ้นเพื่อเลือก แล้วไปที่แท็บ 📈 Data · ⏫ ย้ายไปบนสุด · ↑↓ เลื่อนขึ้น/ลง · ✕ ลบ")
     def move(t: str, to: int) -> None:
@@ -507,16 +552,6 @@ def get_news(ticker: str, name: str) -> list[dict]:
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def get_earnings(ticker: str) -> dict:
     return fetch_earnings(ticker)
-
-
-def esc_dollar(s: str) -> str:
-    """$ สองตัวในข้อความ Markdown ถูกตีความเป็นสูตรคณิตศาสตร์ → escape ให้แสดงเป็นเครื่องหมายดอลลาร์"""
-    return str(s).replace("\\$", "$").replace("$", "\\$")  # กัน escape ซ้ำกับ md_safe
-
-
-def md_safe(s: str) -> str:
-    """กัน $ ถูกตีความเป็นสูตร และ [ ] ทำลิงก์เพี้ยน"""
-    return str(s).replace("$", "\\$").replace("[", "(").replace("]", ")")
 
 
 # ================= Buffett =================
