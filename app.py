@@ -479,7 +479,7 @@ with tab_chart:
 
         fig.update_xaxes(rangebreaks=breaks, rangeslider_visible=False)
         fig.update_yaxes(type="log" if log else "linear", row=1, col=1, title="USD")
-        fig.update_layout(height=620, margin=dict(l=10, r=10, t=10, b=10),
+        fig.update_layout(height=440, margin=dict(l=6, r=6, t=8, b=6),
                           hovermode="x unified", legend=dict(orientation="h", y=1.02),
                           dragmode="pan")
         st.plotly_chart(fig, width="stretch",
