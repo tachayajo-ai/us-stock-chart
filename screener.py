@@ -27,6 +27,8 @@ OUT_R1000 = Path(__file__).with_name("screener_r1000.csv")
 R1000_MEMBERS = Path(__file__).with_name("russell1000.json")
 BI_OUT = Path(__file__).with_name("buffett_indicator.csv")
 UA = {"User-Agent": "Mozilla/5.0 (us-stock-chart screener)"}
+BROWSER_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/126.0 Safari/537.36", "Accept": "text/csv,application/json,text/html,*/*"}
 DISCOUNT, TERMINAL = 0.10, 0.025
 
 
@@ -57,23 +59,47 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     return df[["ticker", "name", "sector"]].drop_duplicates("ticker")
 
 
+def _col(cols, *keys):
+    """หาคอลัมน์ที่ชื่อ (ตัด footnote [1] และตัวพิมพ์) ตรงหรือขึ้นต้นด้วยคำใน keys"""
+    import re
+    for c in cols:
+        n = re.sub(r"\[.*?\]", "", c).strip().lower()
+        if any(n == k or n.startswith(k) for k in keys):
+            return c
+    return None
+
+
 def wiki_table(url: str, min_rows: int) -> pd.DataFrame:
     """หาตารางรายชื่อหุ้นในหน้า Wikipedia: ตารางแรกที่มีคอลัมน์ Ticker/Symbol และจำนวนแถว ≥ min_rows"""
     html = requests.get(url, headers=UA, timeout=30).text
+    seen = []
     for t in pd.read_html(io.StringIO(html)):
         t.columns = [" ".join(map(str, c)) if isinstance(c, tuple) else str(c) for c in t.columns]
-        sym = next((c for c in t.columns if c.strip().lower() in ("ticker", "symbol", "ticker symbol")), None)
+        seen.append(f"{len(t)} rows {list(t.columns)[:6]}")
+        sym = _col(t.columns, "ticker", "symbol")
         if sym is None or len(t) < min_rows:
             continue
-        name = next((c for c in t.columns if c.strip().lower() in ("company", "security", "name")), None)
-        sec = next((c for c in t.columns if "sector" in c.lower()), None)
+        name = _col(t.columns, "company", "security", "name")
+        sec = _col(t.columns, "gics sector", "sector", "icb industry", "industry")
         out = pd.DataFrame({"ticker": t[sym], "name": t[name] if name else "", "sector": t[sec] if sec else ""})
         return _clean(out)
-    raise ValueError(f"no constituents table on {url}")
+    raise ValueError(f"no constituents table on {url}; tables: {seen[:12]}")
 
 
 def nasdaq100() -> pd.DataFrame:
-    return wiki_table("https://en.wikipedia.org/wiki/Nasdaq-100", 90)
+    """รายชื่อ Nasdaq-100: Wikipedia ถ้าไม่ได้ใช้ API ของ Nasdaq"""
+    try:
+        return wiki_table("https://en.wikipedia.org/wiki/Nasdaq-100", 90)
+    except Exception as e:  # noqa: BLE001
+        print(f"Wikipedia Nasdaq-100 failed ({e}); using api.nasdaq.com", file=sys.stderr)
+    r = requests.get("https://api.nasdaq.com/api/quote/list-type/nasdaq100",
+                     headers=BROWSER_UA, timeout=30)
+    rows = r.json()["data"]["data"]["rows"]
+    df = _clean(pd.DataFrame({"ticker": [x["symbol"] for x in rows], "name": [x.get("companyName", "") for x in rows],
+                              "sector": ""}))
+    if len(df) < 90:
+        raise ValueError(f"nasdaq api too short ({len(df)})")
+    return df
 
 
 def russell1000() -> pd.DataFrame:
@@ -82,11 +108,15 @@ def russell1000() -> pd.DataFrame:
         return wiki_table("https://en.wikipedia.org/wiki/Russell_1000_Index", 900)
     except Exception as e:  # noqa: BLE001
         print(f"Wikipedia Russell 1000 failed ({e}); using iShares IWB holdings", file=sys.stderr)
-    text = requests.get("https://www.ishares.com/us/products/239707/ishares-russell-1000-etf/"
-                        "1467271812596.ajax?fileType=csv&fileName=IWB_holdings&dataType=fund",
-                        headers=UA, timeout=60).text
-    start = next(i for i, line in enumerate(text.splitlines()) if line.startswith("Ticker,"))
-    df = pd.read_csv(io.StringIO("\n".join(text.splitlines()[start:])), on_bad_lines="skip")
+    r = requests.get("https://www.ishares.com/us/products/239707/ishares-russell-1000-etf/"
+                     "1467271812596.ajax?fileType=csv&fileName=IWB_holdings&dataType=fund",
+                     headers=BROWSER_UA, timeout=60)
+    lines = r.content.decode("utf-8-sig", errors="replace").splitlines()
+    start = next((i for i, line in enumerate(lines) if line.replace('"', "").lstrip().startswith("Ticker,")), None)
+    if start is None:
+        raise ValueError(f"iShares returned no CSV (HTTP {r.status_code}, {r.headers.get('content-type')}): "
+                         f"{' '.join(lines[:3])[:200]}")
+    df = pd.read_csv(io.StringIO("\n".join(lines[start:])), on_bad_lines="skip")
     if "Asset Class" in df.columns:
         df = df[df["Asset Class"] == "Equity"]
     df = _clean(df.rename(columns={"Ticker": "ticker", "Name": "name", "Sector": "sector"}))
@@ -161,6 +191,7 @@ def main():
     ap.add_argument("--delay", type=float, default=1.0, help="วินาทีที่พักระหว่างหุ้นแต่ละตัว")
     ap.add_argument("--min-results", type=int, default=None,
                     help="ถ้าได้ผลน้อยกว่านี้จะไม่เขียนทับไฟล์เดิม (กันข้อมูลเสียจาก rate limit)")
+    ap.add_argument("--list-only", action="store_true", help="แค่ดึงรายชื่อหุ้นแล้วแสดงจำนวน (ตรวจแหล่งข้อมูล ~1 นาที)")
     args = ap.parse_args()
     r1000 = args.universe == "r1000"
     out = OUT_R1000 if r1000 else OUT
@@ -172,6 +203,9 @@ def main():
     elif r1000:
         members = russell1000()
         print(f"Russell 1000: {len(members)} tickers")
+        if args.list_only:
+            print(members.head(10).to_string())
+            return
         R1000_MEMBERS.write_text(json.dumps({"updated": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                                              "tickers": sorted(members["ticker"])}, indent=0))
         done = set(pd.read_csv(OUT)["ticker"]) if OUT.exists() else set()
@@ -181,6 +215,10 @@ def main():
     else:
         universe = main_universe()
         min_results = 300
+        if args.list_only:
+            print(universe["indexes"].value_counts().to_string())
+            print(universe[universe["indexes"] != "S&P 500"].head(25).to_string())
+            return
     if args.min_results is not None:
         min_results = args.min_results
     print(f"Screening {len(universe)} tickers…")
