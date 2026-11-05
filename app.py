@@ -281,8 +281,8 @@ if not wl:
 if st.session_state.get("selected") not in wl:
     st.session_state.selected = wl[0]
 
-(tab_chart, tab_overview, tab_compare, tab_company, tab_buffett, tab_screener, tab_alerts, tab_port,
- tab_manual) = st.tabs(["📈 กราฟ", "📋 ภาพรวม", "⚖️ เปรียบเทียบ", "🏢 บริษัท", "🎩 Buffett", "🔍 Screener",
+(tab_chart, tab_overview, tab_compare, tab_company, tab_screener, tab_alerts, tab_port,
+ tab_manual) = st.tabs(["📈 กราฟ + Buffett", "📋 ภาพรวม", "⚖️ เปรียบเทียบ", "🏢 บริษัท", "🔍 Screener",
                         "🔔 แจ้งเตือน", "💼 พอร์ต", "📖 คู่มือ"])
 
 # ---------------- tab: chart ----------------
@@ -614,9 +614,11 @@ def analyst_package(ticker, f, rows, extra, price, iv, mos, passed, applicable,
     return "\n".join(x for x in lines if x is not None)
 
 
-with tab_buffett:
-    st.markdown("### 🎩 Buffett checklist รายตัว")
-    b_ticker = st.selectbox("เลือกหุ้น", wl, index=wl.index(st.session_state.selected), key="buffett_ticker")
+# Buffett ต่อท้ายใต้กราฟในแท็บเดียวกัน (หุ้นตัวเดียวกับกราฟ)
+with tab_chart:
+    st.divider()
+    b_ticker = st.session_state.selected
+    st.markdown(f"### 🎩 Buffett checklist — {b_ticker}")
     with st.spinner("กำลังโหลดงบการเงิน…"):
         f = get_fundamentals(b_ticker)
     info = f["info"]
@@ -691,7 +693,8 @@ with tab_buffett:
                                f"(ที่ discount rate {dr:.1%}) · สมมติฐาน DCF ตอนนี้ {g:.1%} — {note}")
 
         table = pd.DataFrame(rows).drop(columns="_s").set_index("หลักเกณฑ์")
-        st.dataframe(table, width="stretch")
+        # สูงพอแสดงทุกแถว ไม่ต้องเลื่อนในตาราง
+        st.dataframe(table, width="stretch", height=36 * (len(table) + 1) + 4)
         with st.expander("📘 วิธีแปลผล Buffett checklist"):
             st.markdown(guides.CHECKLIST)
             if extra.get("financial"):
@@ -891,7 +894,7 @@ with tab_screener:
             },
         )
 
-        add_pick = st.multiselect("เลือกหุ้นเพื่อเพิ่มเข้า Watchlist แล้วดูรายละเอียดในแท็บ 🎩 Buffett",
+        add_pick = st.multiselect("เลือกหุ้นเพื่อเพิ่มเข้า Watchlist แล้วดูรายละเอียดในแท็บ 📈 กราฟ + Buffett",
                                   [t for t in view["ticker"] if t not in st.session_state.watchlist],
                                   key="sc_add")
         if st.button("➕ เพิ่มเข้า Watchlist", disabled=not add_pick, key="sc_add_btn"):
@@ -900,7 +903,7 @@ with tab_screener:
             st.toast("เพิ่มเข้า Watchlist แล้ว: " + ", ".join(add_pick), icon="✅")
             st.rerun()
         st.caption("ใช้คัดกรองเบื้องต้นเท่านั้น ตัวเลขมาจาก Yahoo Finance อาจคลาดเคลื่อน "
-                   "ควรเปิดดูรายละเอียดในแท็บ 🎩 Buffett ก่อนตัดสินใจ · ไม่ใช่คำแนะนำการลงทุน")
+                   "ควรเปิดดูรายละเอียดในแท็บ 📈 กราฟ (ส่วน Buffett ใต้กราฟ) ก่อนตัดสินใจ · ไม่ใช่คำแนะนำการลงทุน")
 
 
 # ================= บริษัท: profile / ข่าว / earnings =================
@@ -1075,7 +1078,7 @@ with tab_alerts:
                     a_iv = st.number_input("มูลค่าที่แท้จริงที่ใช้ ($ ต่อหุ้น)", min_value=0.0,
                                            value=float(round(iv0, 2)) if iv0 else float(round(p_now or 0, 2)),
                                            step=1.0, key=f"al_iv_{a_t}",
-                                           help="ค่าเริ่มต้น = DCF ด้วยสมมติฐานตั้งต้นของแอพ · ถ้าปรับสมมติฐานในแท็บ 🎩 Buffett "
+                                           help="ค่าเริ่มต้น = DCF ด้วยสมมติฐานตั้งต้นของแอพ · ถ้าปรับสมมติฐานในแท็บ 📈 กราฟ (ส่วน Buffett ใต้กราฟ) "
                                                 "แล้วได้ค่าอื่น ใส่ค่านั้นแทนได้")
                     a_mos = st.slider("Margin of safety ที่ต้องการ", 0, 60, 25, 5, format="%d%%", key="al_mos") / 100
                     a_target = a_iv * (1 - a_mos)
@@ -1106,7 +1109,7 @@ with tab_alerts:
 
     state = load_alert_state()
     if not al:
-        st.info("ยังไม่มีการตั้งเตือน — กด ➕ ตั้งเตือนใหม่ หรือกดปุ่ม 🔔 ในแท็บ 🎩 Buffett")
+        st.info("ยังไม่มีการตั้งเตือน — กด ➕ ตั้งเตือนใหม่ หรือกดปุ่ม 🔔 ในแท็บ 📈 กราฟ (ส่วน Buffett ใต้กราฟ)")
     else:
         st.markdown(f"**รายการเตือน ({len(al)})**")
         for i, item in enumerate(list(al)):

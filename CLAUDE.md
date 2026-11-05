@@ -16,7 +16,7 @@ Notes for Claude sessions working on this repo. The user-facing Thai manual is `
 ## Files
 | File | Purpose |
 |---|---|
-| `app.py` | All UI. Tabs: กราฟ, ภาพรวม, เปรียบเทียบ, บริษัท, Buffett, Screener, แจ้งเตือน, พอร์ต, คู่มือ |
+| `app.py` | All UI. Tabs: กราฟ + Buffett (Buffett checklist/DCF/Indicator appended under the chart via a second `with tab_chart:`), ภาพรวม, เปรียบเทียบ, บริษัท, Screener, แจ้งเตือน, พอร์ต, คู่มือ |
 | `buffett.py` | Fundamentals fetch, Buffett checklist, Owner Earnings (OCF − SBC − maintenance capex, Greenwald), DCF, implied growth, financials detection, P/B, share count, Buffett Indicator |
 | `screener.py` | S&P 500 screen (Wikipedia list) → `screener.csv` |
 | `company.py` | Google Translate (free gtx endpoint; optional `GOOGLE_TRANSLATE_API_KEY`), news (Yahoo → Google News RSS), earnings |
