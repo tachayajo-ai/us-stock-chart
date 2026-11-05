@@ -275,25 +275,42 @@ with tab_watch:
             if bad:
                 st.error("ไม่พบ symbol: " + ", ".join(bad))
 
-    st.caption("กดชื่อหุ้นเพื่อเลือก แล้วไปที่แท็บ 📈 กราฟ + Buffett · กด ✕ เพื่อลบ")
+    st.caption("กดชื่อหุ้นเพื่อเลือก แล้วไปที่แท็บ 📈 กราฟ + Buffett · ⏫ ย้ายไปบนสุด · ↑↓ เลื่อนขึ้น/ลง · ✕ ลบ")
+    def move(t: str, to: int) -> None:
+        """callback: ย้าย t ไปตำแหน่ง to (0 = บนสุด) แล้วบันทึก"""
+        lst = st.session_state.watchlist
+        lst.remove(t)
+        lst.insert(max(0, min(to, len(lst))), t)
+        save_watchlist(lst)
+
+    def remove(t: str) -> None:
+        st.session_state.watchlist.remove(t)
+        save_watchlist(st.session_state.watchlist)
+        if st.session_state.get("selected") == t:
+            st.session_state.pop("selected")
+
     with st.container(key="wl_list"):
-        for t in list(st.session_state.watchlist):
-            c1, c2 = st.columns([8, 1], vertical_alignment="center")
+        n = len(st.session_state.watchlist)
+        for i, t in enumerate(list(st.session_state.watchlist)):
             if t in wq:
                 px_, pc_ = wq[t]
                 color = "green" if pc_ > 0 else "red" if pc_ < 0 else "gray"
                 label = f"**{t}** ${px_:,.2f} :{color}[{'▲' if pc_ > 0 else '▼' if pc_ < 0 else '•'}{abs(pc_):.2f}%]"
             else:
                 label = f"**{t}**"
-            c1.button(label, key=f"sel_{t}", width="stretch", on_click=pick, args=(t,),
-                      type="primary" if st.session_state.get("selected") == t else "secondary")
-            if c2.button("", icon=":material/close:", key=f"del_{t}", help=f"ลบ {t}" if len(st.session_state.watchlist) > 1
-                         else "ต้องมีอย่างน้อย 1 ตัว", disabled=len(st.session_state.watchlist) <= 1):
-                st.session_state.watchlist.remove(t)
-                save_watchlist(st.session_state.watchlist)
-                if st.session_state.get("selected") == t:
-                    st.session_state.pop("selected")
-                st.rerun()
+            # horizontal container: ไม่ถูกจัดเรียงเป็นแนวตั้งบนมือถือเหมือน st.columns
+            with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+                st.button(label, key=f"sel_{t}", width="stretch", on_click=pick, args=(t,),
+                          type="primary" if st.session_state.get("selected") == t else "secondary")
+                st.button("", icon=":material/keyboard_double_arrow_up:", key=f"mvtop_{t}", help="ย้ายไปบนสุด",
+                          disabled=i == 0, on_click=move, args=(t, 0))
+                st.button("", icon=":material/arrow_upward:", key=f"mvup_{t}", help="เลื่อนขึ้น",
+                          disabled=i == 0, on_click=move, args=(t, i - 1))
+                st.button("", icon=":material/arrow_downward:", key=f"mvdn_{t}", help="เลื่อนลง",
+                          disabled=i == n - 1, on_click=move, args=(t, i + 1))
+                st.button("", icon=":material/close:", key=f"del_{t}",
+                          help=f"ลบ {t}" if n > 1 else "ต้องมีอย่างน้อย 1 ตัว", disabled=n <= 1,
+                          on_click=remove, args=(t,))
 
     if st.button("🔄 Refresh ข้อมูล", width="stretch"):
         st.cache_data.clear()

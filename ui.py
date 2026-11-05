@@ -53,10 +53,20 @@ label[data-testid="stRadioOption"][data-selected="true"] p { color: #fff !import
 
 /* ---- Watchlist (แท็บ ⭐) ---- */
 [data-testid="stSidebar"] { background: #0F131B; border-right: 1px solid var(--border); }
-.st-key-wl_list .stButton > button { justify-content: flex-start; text-align: left; padding: 6px 12px; }
-.st-key-wl_list .stButton > button p { font-variant-numeric: tabular-nums; font-size: .9rem; white-space: nowrap; }
-.st-key-wl_list [data-testid="stColumn"]:last-child .stButton > button {
-  justify-content: center; padding: 6px 0; min-width: 0; color: var(--muted); }
+.st-key-wl_list [class*="st-key-sel_"] { flex: 1 1 0; min-width: 0; }
+.st-key-wl_list [class*="st-key-sel_"] button { justify-content: flex-start; text-align: left; padding: 6px 12px; }
+.st-key-wl_list [class*="st-key-sel_"] button * { justify-content: flex-start; text-align: left; }
+.st-key-wl_list [class*="st-key-sel_"] button p { font-variant-numeric: tabular-nums; font-size: .9rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-key-wl_list [class*="st-key-mv"] button, .st-key-wl_list [class*="st-key-del_"] button {
+  justify-content: center; padding: 6px 8px; min-width: 0; color: var(--muted); }
+.st-key-wl_list button:disabled { opacity: .3; }
+@media (max-width: 640px) {
+  .st-key-wl_list [data-testid="stHorizontalBlock"], .st-key-wl_list [data-testid="stLayoutWrapper"] { gap: 4px !important; }
+  .st-key-wl_list [class*="st-key-sel_"] button { padding: 6px 8px; }
+  .st-key-wl_list [class*="st-key-sel_"] button p { font-size: .8rem; }
+  .st-key-wl_list [class*="st-key-mv"] button, .st-key-wl_list [class*="st-key-del_"] button { padding: 6px 2px; }
+}
 
 /* ---- ส่วนหัวหุ้น ---- */
 .hero { display:flex; gap:16px; align-items:center; background: linear-gradient(135deg, #1A1F33 0%, #141924 60%);
