@@ -174,7 +174,7 @@ def screen_one(ticker: str, name: str, sector: str, tnx) -> dict | None:
     applicable = sum(r["_s"] != "na" for r in rows)
     m = extra["metrics"]
     return {
-        "ticker": ticker, "name": name, "sector": sector,
+        "ticker": ticker, "name": name, "sector": sector, "country": info.get("country"),
         "score": passed, "applicable": applicable,
         "score_pct": passed / applicable if applicable else None,
         "price": price, "market_cap": info.get("marketCap"),

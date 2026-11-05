@@ -996,6 +996,10 @@ with tab_screener:
                                key="sc_sort")
         incl_fin = c5.checkbox("รวมธนาคาร/ประกัน (ไม่มี MOS)", value=False, key="sc_fin",
                                help="หุ้นกลุ่มการเงินไม่คำนวณ DCF จึงไม่มี MOS · เลือกเพื่อแสดงโดยดู P/B แทน")
+        us_only = c5.checkbox("เฉพาะบริษัทสหรัฐ", value=False, key="sc_us",
+                              help="ตัดบริษัทต่างชาติที่จดทะเบียนในสหรัฐ (ADR เช่น PDD, TSM, ASML) ออก "
+                                   "ใกล้เคียงหลักเกณฑ์ Russell 1000 · สมาชิก S&P 500 นับเป็นบริษัทสหรัฐทั้งหมด "
+                                   "(S&P คัดเฉพาะบริษัทสหรัฐ แม้บางแห่งมีสำนักงานใหญ่ที่ไอร์แลนด์/อังกฤษ)")
         query = c6.text_input("ค้นหาชื่อหรือ symbol", key="sc_q", placeholder="เช่น Apple, KO")
 
         fin = (sc["financial"].astype(str).str.lower() == "true") if "financial" in sc.columns \
@@ -1007,6 +1011,9 @@ with tab_screener:
             view = view[mos_ok.fillna(False) | (fin.reindex(view.index) & incl_fin)]
         elif not incl_fin:
             view = view[~fin.reindex(view.index)]
+        if us_only:
+            country = view["country"] if "country" in view.columns else pd.Series(None, index=view.index)
+            view = view[view["indexes"].str.contains("S&P 500", regex=False) | (country == "United States")]
         if pick_sec:
             view = view[view["sector"].isin(pick_sec)]
         if query:
@@ -1035,7 +1042,9 @@ with tab_screener:
             if col not in show.columns:
                 show[col] = None
         show["implied_growth"] = pd.to_numeric(show["implied_growth"], errors="coerce") * 100
-        show = show[["ticker", "name", "sector", "indexes", "score_txt", "score_pct", "price", "intrinsic_value",
+        if "country" not in show.columns:
+            show["country"] = None
+        show = show[["ticker", "name", "sector", "country", "indexes", "score_txt", "score_pct", "price", "intrinsic_value",
                      "margin_of_safety", "implied_growth", "price_to_book", "oe_yield", "roe", "gross_margin", "net_margin", "debt_years", "failed"]]
         st.dataframe(
             show, hide_index=True, width="stretch", height=480,
@@ -1043,6 +1052,7 @@ with tab_screener:
                 "ticker": st.column_config.TextColumn("Symbol"),
                 "name": st.column_config.TextColumn("บริษัท"),
                 "sector": st.column_config.TextColumn("Sector"),
+                "country": st.column_config.TextColumn("ประเทศ"),
                 "indexes": st.column_config.TextColumn("ดัชนี"),
                 "score_txt": st.column_config.TextColumn("คะแนน"),
                 "score_pct": st.column_config.ProgressColumn("ผ่าน %", min_value=0, max_value=100, format="%.0f%%"),
