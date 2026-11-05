@@ -872,9 +872,8 @@ with tab_chart:
                                f"{'≥ ' if imp >= 0.8 else '≤ ' if imp <= -0.3 else ''}{imp:+.1%} ต่อปี นาน 10 ปี** "
                                f"(ที่ discount rate {dr:.1%}) · สมมติฐาน DCF ตอนนี้ {g:.1%} — {note}")
 
-        table = pd.DataFrame(rows).drop(columns="_s").set_index("หลักเกณฑ์")
-        # สูงพอแสดงทุกแถว ไม่ต้องเลื่อนในตาราง
-        st.dataframe(table, width="stretch", height=36 * (len(table) + 1) + 4)
+        # การ์ดเรียงลงมาแทนตาราง: บนมือถือตารางต้องเลื่อนซ้ายขวาและคอลัมน์ทับกัน
+        st.markdown(ui.checklist(rows), unsafe_allow_html=True)
         with st.expander("📘 วิธีแปลผล Buffett checklist"):
             st.markdown(guides.CHECKLIST)
             if extra.get("financial"):

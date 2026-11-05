@@ -98,6 +98,16 @@ label[data-testid="stRadioOption"][data-selected="true"] p { color: #fff !import
 .chip .d { font-size:.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .chip.up .v { color: var(--up); } .chip.down .v { color: var(--down); }
 .chip.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: #1A1D33; }
+.ck { display:flex; flex-direction:column; gap:8px; margin: 4px 0 12px; }
+.ck-row { background: var(--card); border:1px solid var(--border); border-radius:12px; padding:10px 14px; }
+.ck-row.pass { border-left: 4px solid #22c55e; }
+.ck-row.fail { border-left: 4px solid #ef4444; }
+.ck-row.na   { border-left: 4px solid #64748b; }
+.ck-top { display:flex; justify-content:space-between; gap:10px; align-items:baseline; flex-wrap:wrap; }
+.ck-name { font-weight:600; }
+.ck-res { white-space:nowrap; font-size:.9rem; }
+.ck-val { margin-top:2px; font-variant-numeric: tabular-nums; }
+.ck-rule, .ck-why { color: var(--muted); font-size:.82rem; margin-top:2px; }
 </style>
 """
 
@@ -149,3 +159,23 @@ def logo_url(website: str | None) -> str | None:
     from urllib.parse import urlparse
     host = urlparse(website if "://" in website else "https://" + website).netloc
     return f"https://www.google.com/s2/favicons?domain={host}&sz=128" if host else None
+
+
+def _h(x) -> str:
+    """escape HTML และ $ (กัน Markdown ตีความเป็นสูตร)"""
+    return html.escape(str(x)).replace("$", "&#36;")
+
+
+def checklist(rows: list[dict]) -> str:
+    """Buffett checklist เป็นการ์ดเรียงลงมา — อ่านบนมือถือได้โดยไม่ต้องเลื่อนซ้ายขวา"""
+    out = ['<div class="ck">']
+    for r in rows:
+        out.append(
+            f'<div class="ck-row {r.get("_s", "na")}"><div class="ck-top">'
+            f'<span class="ck-name">{_h(r["หลักเกณฑ์"])}</span><span class="ck-res">{_h(r["ผล"])}</span></div>'
+            f'<div class="ck-val">{_h(r["ค่าจริง"])}</div>'
+            f'<div class="ck-rule">เกณฑ์: {_h(r["เกณฑ์ผ่าน"])}</div>'
+            + (f'<div class="ck-why">{_h(r["ทำไมสำคัญ"])}</div>' if r.get("ทำไมสำคัญ") else "")
+            + "</div>")
+    out.append("</div>")
+    return "".join(out)
