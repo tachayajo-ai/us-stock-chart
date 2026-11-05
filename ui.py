@@ -51,11 +51,11 @@ label[data-testid="stRadioOption"][data-selected="true"] p { color: #fff !import
 [data-testid="stPlotlyChart"] { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; }
 [data-testid="stAlert"] { border-radius: 12px; }
 
-/* ---- Sidebar watchlist ---- */
+/* ---- Watchlist (แท็บ ⭐) ---- */
 [data-testid="stSidebar"] { background: #0F131B; border-right: 1px solid var(--border); }
-[data-testid="stSidebar"] .stButton > button { justify-content: flex-start; text-align: left; padding: 6px 12px; }
-[data-testid="stSidebar"] .stButton > button p { font-variant-numeric: tabular-nums; font-size: .84rem; white-space: nowrap; }
-[data-testid="stSidebar"] [data-testid="stColumn"]:last-child .stButton > button {
+.st-key-wl_list .stButton > button { justify-content: flex-start; text-align: left; padding: 6px 12px; }
+.st-key-wl_list .stButton > button p { font-variant-numeric: tabular-nums; font-size: .9rem; white-space: nowrap; }
+.st-key-wl_list [data-testid="stColumn"]:last-child .stButton > button {
   justify-content: center; padding: 6px 0; min-width: 0; color: var(--muted); }
 
 /* ---- ส่วนหัวหุ้น ---- */

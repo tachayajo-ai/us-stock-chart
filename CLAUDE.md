@@ -16,7 +16,7 @@ Notes for Claude sessions working on this repo. The user-facing Thai manual is `
 ## Files
 | File | Purpose |
 |---|---|
-| `app.py` | All UI. Tabs: กราฟ + Buffett (Buffett checklist/DCF/Indicator appended under the chart via a second `with tab_chart:`), ภาพรวม, เปรียบเทียบ, บริษัท, Screener, แจ้งเตือน, พอร์ต, คู่มือ |
+| `app.py` | All UI. Tabs: กราฟ + Buffett (ticker selectbox `chart_ticker` at top; Buffett checklist/DCF/Indicator appended under the chart via a second `with tab_chart:`), Watchlist (add/select/delete; no sidebar — `pick()` callback sets `selected` + `chart_ticker`), ภาพรวม, เปรียบเทียบ, บริษัท, Screener, แจ้งเตือน, พอร์ต, คู่มือ |
 | `buffett.py` | Fundamentals fetch, Buffett checklist, Owner Earnings (OCF − SBC − maintenance capex, Greenwald), DCF, implied growth, financials detection, P/B, share count, Buffett Indicator |
 | `screener.py` | S&P 500 screen (Wikipedia list) → `screener.csv` |
 | `company.py` | Google Translate (free gtx endpoint; optional `GOOGLE_TRANSLATE_API_KEY`), news (Yahoo → Google News RSS), earnings |
@@ -35,7 +35,7 @@ Notes for Claude sessions working on this repo. The user-facing Thai manual is `
 - yfinance quirks: `priceToBook` wrong for multi-class shares (use `price_to_book()`), `sharesOutstanding` per class (use `share_count()` = marketCap/price), `Change In Working Capital` unreliable (Owner Earnings uses OCF).
 - Financials (banks/insurers/brokers/lenders by Yahoo `industry`; V/MA/PYPL excluded) get no DCF/MOS; show P/B + ROE.
 - DCF default growth is conservative: 0% if any negative cash-flow year, else min(cash-flow CAGR on 2-yr rolling mean, revenue CAGR), capped 10%.
-- Sidebar must keep ≥1 watchlist item (empty list used to stop the whole app).
+- Watchlist must keep ≥1 item (empty list used to stop the whole app).
 - This sandbox cannot reach Yahoo/FRED/ntfy; test with a mocked `yfinance` (`sys.modules["yfinance"] = SimpleNamespace(Ticker=Fake, download=...)`) via `streamlit.testing.v1.AppTest`, and visually with `streamlit run` + Playwright screenshots. Verify real data by reading committed CSVs or Actions logs (`gh run view <id> --log`).
 - `git push` can race with the Actions bot: `git fetch && git rebase origin/main` before pushing; retry.
 

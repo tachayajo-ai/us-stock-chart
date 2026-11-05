@@ -231,12 +231,38 @@ def ticker_exists(ticker: str) -> bool:
         return False
 
 
-# ---------------- sidebar: watchlist ----------------
-with st.sidebar:
-    st.header("Watchlist")
+# ---------------- เลือกหุ้น (ใช้ร่วมกันทุกแท็บ) ----------------
+wl = st.session_state.watchlist
+if not wl:
+    st.session_state.watchlist = wl = ["SPY"]
+if st.session_state.get("selected") not in wl:
+    st.session_state.selected = wl[0]
+wq = watch_quotes(tuple(wl))
+
+
+def pick(t: str) -> None:
+    """callback: เลือกหุ้น (ทำก่อน widget ถูกสร้าง จึงตั้งค่า key ของ selectbox ได้)"""
+    st.session_state.selected = t
+    st.session_state.chart_ticker = t
+
+
+def quote_label(t: str) -> str:
+    if t not in wq:
+        return t
+    px_, pc_ = wq[t]
+    return f"{t}   ${px_:,.2f}   {'▲' if pc_ > 0 else '▼' if pc_ < 0 else '•'}{abs(pc_):.2f}%"
+
+
+(tab_chart, tab_watch, tab_overview, tab_compare, tab_company, tab_screener, tab_alerts, tab_port,
+ tab_manual) = st.tabs(["📈 กราฟ + Buffett", "⭐ Watchlist", "📋 ภาพรวม", "⚖️ เปรียบเทียบ", "🏢 บริษัท",
+                        "🔍 Screener", "🔔 แจ้งเตือน", "💼 พอร์ต", "📖 คู่มือ"])
+
+# ---------------- tab: watchlist ----------------
+with tab_watch:
     with st.form("add", clear_on_submit=True):
-        new = st.text_input("เพิ่มหุ้น / ETF", placeholder="เช่น TSLA, SCHD, BRK-B")
-        if st.form_submit_button("➕ เพิ่ม", width="stretch"):
+        fc1, fc2 = st.columns([4, 1], vertical_alignment="bottom")
+        new = fc1.text_input("เพิ่มหุ้น / ETF", placeholder="เช่น TSLA, SCHD, BRK-B")
+        if fc2.form_submit_button("➕ เพิ่ม", width="stretch"):
             added, bad = [], []
             for t in [x.strip().upper() for x in new.replace(" ", ",").split(",") if x.strip()]:
                 if t in st.session_state.watchlist:
@@ -245,45 +271,33 @@ with st.sidebar:
             if added:
                 st.session_state.watchlist += added
                 save_watchlist(st.session_state.watchlist)
-                st.success("เพิ่มแล้ว: " + ", ".join(added))
+                st.success("เพิ่มแล้ว: " + ", ".join(added) + " — เลือกดูได้ที่แท็บ 📈 กราฟ + Buffett")
             if bad:
                 st.error("ไม่พบ symbol: " + ", ".join(bad))
 
-    wq = watch_quotes(tuple(st.session_state.watchlist))
-    for t in list(st.session_state.watchlist):
-        c1, c2 = st.columns([5, 1], vertical_alignment="center")
-        if t in wq:
-            px_, pc_ = wq[t]
-            color = "green" if pc_ > 0 else "red" if pc_ < 0 else "gray"
-            label = f"**{t}** ${px_:,.2f} :{color}[{'▲' if pc_ > 0 else '▼' if pc_ < 0 else '•'}{abs(pc_):.2f}%]"
-        else:
-            label = f"**{t}**"
-        if c1.button(label, key=f"sel_{t}", width="stretch",
-                     type="primary" if st.session_state.get("selected") == t else "secondary"):
-            st.session_state.selected = t
-            st.rerun()
-        if c2.button("", icon=":material/close:", key=f"del_{t}", help=f"ลบ {t}" if len(st.session_state.watchlist) > 1
-                     else "ต้องมีอย่างน้อย 1 ตัว", disabled=len(st.session_state.watchlist) <= 1):
-            st.session_state.watchlist.remove(t)
-            save_watchlist(st.session_state.watchlist)
-            if st.session_state.get("selected") == t:
-                st.session_state.pop("selected")
-            st.rerun()
+    st.caption("กดชื่อหุ้นเพื่อเลือก แล้วไปที่แท็บ 📈 กราฟ + Buffett · กด ✕ เพื่อลบ")
+    with st.container(key="wl_list"):
+        for t in list(st.session_state.watchlist):
+            c1, c2 = st.columns([8, 1], vertical_alignment="center")
+            if t in wq:
+                px_, pc_ = wq[t]
+                color = "green" if pc_ > 0 else "red" if pc_ < 0 else "gray"
+                label = f"**{t}** ${px_:,.2f} :{color}[{'▲' if pc_ > 0 else '▼' if pc_ < 0 else '•'}{abs(pc_):.2f}%]"
+            else:
+                label = f"**{t}**"
+            c1.button(label, key=f"sel_{t}", width="stretch", on_click=pick, args=(t,),
+                      type="primary" if st.session_state.get("selected") == t else "secondary")
+            if c2.button("", icon=":material/close:", key=f"del_{t}", help=f"ลบ {t}" if len(st.session_state.watchlist) > 1
+                         else "ต้องมีอย่างน้อย 1 ตัว", disabled=len(st.session_state.watchlist) <= 1):
+                st.session_state.watchlist.remove(t)
+                save_watchlist(st.session_state.watchlist)
+                if st.session_state.get("selected") == t:
+                    st.session_state.pop("selected")
+                st.rerun()
 
     if st.button("🔄 Refresh ข้อมูล", width="stretch"):
         st.cache_data.clear()
         st.rerun()
-
-wl = st.session_state.watchlist
-if not wl:
-    st.info("Watchlist ว่าง — เพิ่ม symbol ที่ sidebar ด้านซ้าย")
-    st.stop()
-if st.session_state.get("selected") not in wl:
-    st.session_state.selected = wl[0]
-
-(tab_chart, tab_overview, tab_compare, tab_company, tab_screener, tab_alerts, tab_port,
- tab_manual) = st.tabs(["📈 กราฟ + Buffett", "📋 ภาพรวม", "⚖️ เปรียบเทียบ", "🏢 บริษัท", "🔍 Screener",
-                        "🔔 แจ้งเตือน", "💼 พอร์ต", "📖 คู่มือ"])
 
 # ---------------- tab: chart ----------------
 def period_changes(close: pd.Series) -> dict:
@@ -315,6 +329,10 @@ def period_changes(close: pd.Series) -> dict:
 
 
 with tab_chart:
+    if st.session_state.get("chart_ticker") not in wl:
+        st.session_state.chart_ticker = st.session_state.selected
+    st.selectbox("เลือกหุ้น", wl, key="chart_ticker", format_func=quote_label,
+                 on_change=lambda: st.session_state.update(selected=st.session_state.chart_ticker))
     ticker = st.session_state.selected
     q = get_quote(ticker)
 
