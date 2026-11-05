@@ -1,9 +1,9 @@
 """คัดกรองหุ้นด้วย Buffett checklist
 - วันเสาร์  (.github/workflows/screener.yml):       S&P 500 + Nasdaq-100 → screener.csv (+ buffett_indicator.csv)
-- วันอาทิตย์ (.github/workflows/screener_r1000.yml): Russell 1000 เฉพาะตัวที่ไม่อยู่ใน screener.csv
+- วันอาทิตย์ (.github/workflows/screener_r1000.yml): Top 1000 (มูลค่าตลาดสูงสุด ≈ Russell 1000) เฉพาะตัวที่ไม่อยู่ใน screener.csv
                                                     → screener_r1000.csv + russell1000.json (รายชื่อสมาชิกทั้งหมด)
 รันเอง:  python screener.py                      (S&P 500 + Nasdaq-100)
-         python screener.py --universe r1000     (Russell 1000 ส่วนที่เหลือ)
+         python screener.py --universe r1000     (Top 1000 ส่วนที่เหลือ)
          python screener.py --tickers AAPL,MSFT,KO   (ทดสอบไม่กี่ตัว)
 """
 import argparse
@@ -27,8 +27,6 @@ OUT_R1000 = Path(__file__).with_name("screener_r1000.csv")
 R1000_MEMBERS = Path(__file__).with_name("russell1000.json")
 BI_OUT = Path(__file__).with_name("buffett_indicator.csv")
 UA = {"User-Agent": "Mozilla/5.0 (us-stock-chart screener)"}
-BROWSER_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/126.0 Safari/537.36", "Accept": "text/csv,application/json,text/html,*/*"}
 DISCOUNT, TERMINAL = 0.10, 0.025
 
 
@@ -87,42 +85,48 @@ def wiki_table(url: str, min_rows: int) -> pd.DataFrame:
 
 
 def nasdaq100() -> pd.DataFrame:
-    """รายชื่อ Nasdaq-100: Wikipedia ถ้าไม่ได้ใช้ API ของ Nasdaq"""
-    try:
-        return wiki_table("https://en.wikipedia.org/wiki/Nasdaq-100", 90)
-    except Exception as e:  # noqa: BLE001
-        print(f"Wikipedia Nasdaq-100 failed ({e}); using api.nasdaq.com", file=sys.stderr)
+    """รายชื่อ Nasdaq-100: หน้า Wikipedia ก่อน ถ้าไม่ได้ใช้ API สาธารณะของ Nasdaq"""
+    for url in ("https://en.wikipedia.org/wiki/List_of_Nasdaq-100_companies",
+                "https://en.wikipedia.org/wiki/Nasdaq-100"):
+        try:
+            return wiki_table(url, 90)
+        except Exception as e:  # noqa: BLE001
+            print(f"Wikipedia Nasdaq-100 failed ({url}: {str(e)[:120]})", file=sys.stderr)
     r = requests.get("https://api.nasdaq.com/api/quote/list-type/nasdaq100",
-                     headers=BROWSER_UA, timeout=30)
+                     headers={**UA, "Accept": "application/json"}, timeout=30)
     rows = r.json()["data"]["data"]["rows"]
     df = _clean(pd.DataFrame({"ticker": [x["symbol"] for x in rows], "name": [x.get("companyName", "") for x in rows],
                               "sector": ""}))
     if len(df) < 90:
         raise ValueError(f"nasdaq api too short ({len(df)})")
+    print("Nasdaq-100 list from api.nasdaq.com")
     return df
 
 
-def russell1000() -> pd.DataFrame:
-    """รายชื่อ Russell 1000: Wikipedia ถ้าไม่ได้ใช้ holdings ของ iShares IWB"""
-    try:
-        return wiki_table("https://en.wikipedia.org/wiki/Russell_1000_Index", 900)
-    except Exception as e:  # noqa: BLE001
-        print(f"Wikipedia Russell 1000 failed ({e}); using iShares IWB holdings", file=sys.stderr)
-    r = requests.get("https://www.ishares.com/us/products/239707/ishares-russell-1000-etf/"
-                     "1467271812596.ajax?fileType=csv&fileName=IWB_holdings&dataType=fund",
-                     headers=BROWSER_UA, timeout=60)
-    lines = r.content.decode("utf-8-sig", errors="replace").splitlines()
-    start = next((i for i, line in enumerate(lines) if line.replace('"', "").lstrip().startswith("Ticker,")), None)
-    if start is None:
-        raise ValueError(f"iShares returned no CSV (HTTP {r.status_code}, {r.headers.get('content-type')}): "
-                         f"{' '.join(lines[:3])[:200]}")
-    df = pd.read_csv(io.StringIO("\n".join(lines[start:])), on_bad_lines="skip")
-    if "Asset Class" in df.columns:
-        df = df[df["Asset Class"] == "Equity"]
-    df = _clean(df.rename(columns={"Ticker": "ticker", "Name": "name", "Sector": "sector"}))
-    df["name"] = df["name"].astype(str).str.title()
+YAHOO_TO_GICS = {"Technology": "Information Technology", "Financial Services": "Financials",
+                 "Healthcare": "Health Care", "Consumer Cyclical": "Consumer Discretionary",
+                 "Consumer Defensive": "Consumer Staples", "Basic Materials": "Materials"}
+
+
+def top1000() -> pd.DataFrame:
+    """บริษัทจดทะเบียนในสหรัฐที่มูลค่าตลาดสูงสุด 1,000 อันดับ จาก Yahoo screener (ผ่าน yfinance)
+    — ใกล้เคียง Russell 1000 ซึ่งคัดจากมูลค่าตลาดเช่นกัน (แต่ไม่ตัดหุ้นต่างชาติที่จดทะเบียนในสหรัฐ)"""
+    from yfinance import EquityQuery
+    q = EquityQuery("and", [EquityQuery("eq", ["region", "us"]),
+                            EquityQuery("is-in", ["exchange", "NMS", "NYQ", "NGM", "NCM", "ASE"]),
+                            EquityQuery("gt", ["intradaymarketcap", 1e9])])
+    rows = []
+    for offset in range(0, 1000, 250):
+        res = yf.screen(q, offset=offset, size=250, sortField="intradaymarketcap", sortAsc=False)
+        quotes = res.get("quotes", [])
+        rows += [{"ticker": x.get("symbol"), "name": x.get("longName") or x.get("shortName", ""), "sector": ""}
+                 for x in quotes if x.get("quoteType", "EQUITY") == "EQUITY"]
+        if len(quotes) < 250:
+            break
+        time.sleep(2)
+    df = _clean(pd.DataFrame(rows, columns=["ticker", "name", "sector"])).head(1000)
     if len(df) < 900:
-        raise ValueError(f"iShares holdings too short ({len(df)})")
+        raise ValueError(f"Yahoo screener returned only {len(df)} companies")
     return df
 
 
@@ -154,6 +158,7 @@ def screen_one(ticker: str, name: str, sector: str, tnx) -> dict | None:
     f = fetch_with_retry(ticker)
     if f is None or not is_company(f):
         return None
+    sector = sector or YAHOO_TO_GICS.get(f["info"].get("sector", ""), f["info"].get("sector", ""))
     financial = is_financial(f["info"], sector)
     checks, extra = buffett_checks(f, financial=financial)
     info = f["info"]
@@ -186,7 +191,7 @@ def screen_one(ticker: str, name: str, sector: str, tnx) -> dict | None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--universe", choices=["main", "r1000"], default="main",
-                    help="main = S&P 500 + Nasdaq-100 · r1000 = Russell 1000 ที่ไม่อยู่ใน screener.csv")
+                    help="main = S&P 500 + Nasdaq-100 · r1000 = Top 1000 (≈ Russell 1000) ที่ไม่อยู่ใน screener.csv")
     ap.add_argument("--tickers", help="คั่นด้วย comma (ทดสอบ — ไม่ใส่ = ตาม --universe)")
     ap.add_argument("--delay", type=float, default=1.0, help="วินาทีที่พักระหว่างหุ้นแต่ละตัว")
     ap.add_argument("--min-results", type=int, default=None,
@@ -201,15 +206,15 @@ def main():
                                  "name": "", "sector": "", "indexes": ""})
         min_results = 1
     elif r1000:
-        members = russell1000()
-        print(f"Russell 1000: {len(members)} tickers")
+        members = top1000()
+        print(f"Top 1000: {len(members)} tickers")
         if args.list_only:
             print(members.head(10).to_string())
             return
         R1000_MEMBERS.write_text(json.dumps({"updated": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                                              "tickers": sorted(members["ticker"])}, indent=0))
         done = set(pd.read_csv(OUT)["ticker"]) if OUT.exists() else set()
-        universe = members[~members["ticker"].isin(done)].assign(indexes="Russell 1000")
+        universe = members[~members["ticker"].isin(done)].assign(indexes="Top 1000")
         print(f"Skip {len(members) - len(universe)} already in {OUT.name}")
         min_results = 100
     else:

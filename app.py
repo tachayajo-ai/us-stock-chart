@@ -574,9 +574,9 @@ def load_buffett_indicator(mtime: float) -> tuple[pd.DataFrame, str]:
 
 
 SCREENER_FILE = Path(__file__).with_name("screener.csv")              # เสาร์: S&P 500 + Nasdaq-100
-SCREENER_R1000_FILE = Path(__file__).with_name("screener_r1000.csv")  # อาทิตย์: Russell 1000 ส่วนที่เหลือ
+SCREENER_R1000_FILE = Path(__file__).with_name("screener_r1000.csv")  # อาทิตย์: Top 1000 ส่วนที่เหลือ
 R1000_MEMBERS_FILE = Path(__file__).with_name("russell1000.json")
-INDEXES = ["S&P 500", "Nasdaq-100", "Russell 1000"]
+INDEXES = ["S&P 500", "Nasdaq-100", "Top 1000"]
 
 
 def screener_mtime() -> float:
@@ -585,7 +585,7 @@ def screener_mtime() -> float:
 
 @st.cache_data(ttl=600, show_spinner=False)
 def load_screener(mtime: float) -> pd.DataFrame:  # mtime: โหลดใหม่เมื่อไฟล์เปลี่ยน
-    """รวมผลรอบเสาร์ + อาทิตย์ · คอลัมน์ indexes เช่น S&P 500 · Nasdaq-100 · Russell 1000"""
+    """รวมผลรอบเสาร์ + อาทิตย์ · คอลัมน์ indexes เช่น S&P 500 · Nasdaq-100 · Top 1000"""
     sc = pd.read_csv(SCREENER_FILE)
     if "indexes" not in sc.columns:  # ไฟล์รุ่นเก่า (S&P 500 อย่างเดียว)
         sc["indexes"] = "S&P 500"
@@ -594,13 +594,13 @@ def load_screener(mtime: float) -> pd.DataFrame:  # mtime: โหลดใหม
         try:
             members = set(json.loads(R1000_MEMBERS_FILE.read_text())["tickers"])
             m = sc["ticker"].isin(members)
-            sc.loc[m, "indexes"] = sc.loc[m, "indexes"] + " · Russell 1000"
+            sc.loc[m, "indexes"] = sc.loc[m, "indexes"] + " · Top 1000"
         except Exception:
             pass
     if SCREENER_R1000_FILE.exists():
         extra = pd.read_csv(SCREENER_R1000_FILE)
         extra = extra[~extra["ticker"].isin(sc["ticker"])]
-        sc = pd.concat([sc, extra.assign(indexes="Russell 1000")], ignore_index=True)
+        sc = pd.concat([sc, extra.assign(indexes="Top 1000")], ignore_index=True)
     sc["indexes"] = sc["indexes"].str.strip(" ·")
     return sc
 
@@ -955,15 +955,15 @@ with tab_chart:
 
 # ================= Screener (S&P 500) =================
 with tab_screener:
-    st.markdown("### 🔍 Buffett Screener — S&P 500 · Nasdaq-100 · Russell 1000")
+    st.markdown("### 🔍 Buffett Screener — S&P 500 · Nasdaq-100 · Top 1000")
     if not SCREENER_FILE.exists():
         st.info("ยังไม่มีผลคัดกรอง — ไปที่ GitHub repo → แท็บ **Actions** → **Buffett screener (S&P 500 + Nasdaq-100)** "
                 "→ **Run workflow** รอประมาณ 30-40 นาที แล้วเปิดหน้านี้ใหม่")
     else:
         sc = load_screener(screener_mtime())
-        upd = sc.groupby(sc["indexes"] == "Russell 1000")["updated"].max()
+        upd = sc.groupby(sc["indexes"] == "Top 1000")["updated"].max()
         st.caption(f"S&P 500 + Nasdaq-100 อัปเดต {upd.get(False, '—')} (ทุกวันเสาร์) · "
-                   f"Russell 1000 ส่วนที่เหลืออัปเดต {upd.get(True, 'ยังไม่มี')} (ทุกวันอาทิตย์) · {len(sc)} บริษัท · "
+                   f"Top 1000 ส่วนที่เหลืออัปเดต {upd.get(True, 'ยังไม่มี')} (ทุกวันอาทิตย์) · {len(sc)} บริษัท · "
                    "DCF ใช้ค่าเริ่มต้น (discount 10%, terminal 2.5%, growth = ต่ำกว่าระหว่าง CAGR กระแสเงินสด/รายได้ จำกัด 0–10%) · "
                    "ธนาคาร/ประกัน/โบรกเกอร์ ไม่คำนวณ DCF/MOS ให้ดู P/B แทน")
         with st.expander("📘 วิธีใช้และแปลผล Screener"):
@@ -973,8 +973,9 @@ with tab_screener:
         MOS_OPTS = {"มี Margin of safety (> 0%)": 0, "MOS ≥ 25% (เกณฑ์ Buffett)": 25, "MOS ≥ 50%": 50,
                     "กำหนดเอง": None, "ไม่กรอง MOS": -999}
         idx_pick = st.radio("ดัชนี", ["ทั้งหมด"] + INDEXES, horizontal=True, key="sc_index",
-                            help="หุ้นหนึ่งตัวอาจอยู่หลายดัชนี เช่น AAPL อยู่ทั้ง 3 ดัชนี · "
-                                 "Russell 1000 แสดงครบเมื่อรอบวันอาทิตย์รันแล้ว")
+                            format_func=lambda x: "Top 1000 (≈ Russell 1000)" if x == "Top 1000" else x,
+                            help="หุ้นหนึ่งตัวอาจอยู่หลายกลุ่ม เช่น AAPL อยู่ทั้ง 3 กลุ่ม · Top 1000 = บริษัทจดทะเบียนในสหรัฐที่มูลค่าตลาดสูงสุด "
+                                 "1,000 อันดับ (จาก Yahoo) ใกล้เคียง Russell 1000 · แสดงครบเมื่อรอบวันอาทิตย์รันแล้ว")
         if idx_pick != "ทั้งหมด":
             sc = sc[sc["indexes"].str.contains(idx_pick, regex=False)].reset_index(drop=True)
         c1, c2, c3 = st.columns([1.2, 1.4, 2])
