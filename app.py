@@ -253,9 +253,8 @@ def quote_label(t: str) -> str:
     return f"{t}   ${px_:,.2f}   {'▲' if pc_ > 0 else '▼' if pc_ < 0 else '•'}{abs(pc_):.2f}%"
 
 
-(tab_chart, tab_watch, tab_compare, tab_market, tab_screener, tab_alerts, tab_port,
- tab_manual) = st.tabs(["📈 กราฟ + Buffett", "⭐ Watchlist", "⚖️ เปรียบเทียบ", "🇺🇸 Buffett Indicator",
-                        "🔍 Screener", "🔔 แจ้งเตือน", "💼 พอร์ต", "📖 คู่มือ"])
+(tab_chart, tab_watch, tab_compare, tab_screener, tab_alerts, tab_port,
+ tab_manual) = st.tabs(["📈 Data", "⭐ Watchlist", "⚖️ เปรียบเทียบ", "🔍 Screener", "🔔 แจ้งเตือน", "💼 พอร์ต", "📖 คู่มือ"])
 
 # ---------------- tab: watchlist ----------------
 with tab_watch:
@@ -271,11 +270,11 @@ with tab_watch:
             if added:
                 st.session_state.watchlist += added
                 save_watchlist(st.session_state.watchlist)
-                st.success("เพิ่มแล้ว: " + ", ".join(added) + " — เลือกดูได้ที่แท็บ 📈 กราฟ + Buffett")
+                st.success("เพิ่มแล้ว: " + ", ".join(added) + " — เลือกดูได้ที่แท็บ 📈 Data")
             if bad:
                 st.error("ไม่พบ symbol: " + ", ".join(bad))
 
-    st.caption("กดชื่อหุ้นเพื่อเลือก แล้วไปที่แท็บ 📈 กราฟ + Buffett · ⏫ ย้ายไปบนสุด · ↑↓ เลื่อนขึ้น/ลง · ✕ ลบ")
+    st.caption("กดชื่อหุ้นเพื่อเลือก แล้วไปที่แท็บ 📈 Data · ⏫ ย้ายไปบนสุด · ↑↓ เลื่อนขึ้น/ลง · ✕ ลบ")
     def move(t: str, to: int) -> None:
         """callback: ย้าย t ไปตำแหน่ง to (0 = บนสุด) แล้วบันทึก"""
         lst = st.session_state.watchlist
@@ -743,7 +742,7 @@ with tab_chart:
 
     if not is_company(f):
         st.info(f"{b_ticker} เป็น {qtype or 'กองทุน/ดัชนี'} หรือไม่มีงบการเงิน — Buffett checklist ใช้ได้เฉพาะหุ้นรายบริษัท "
-                "ดู Buffett Indicator ของตลาดรวมในแท็บ 🇺🇸 Buffett Indicator แทน")
+                "ดู Buffett Indicator ของตลาดรวมท้ายแท็บ 🔍 Screener แทน")
     else:
         rows, extra = buffett_checks(f)
         price = current_price(info) or get_quote(b_ticker).get("close")
@@ -893,51 +892,6 @@ with tab_chart:
         st.caption("กดหัวข้อเพื่ออ่านข่าวต้นฉบับ · แหล่งข่าว: Yahoo Finance (สำรอง: Google News) · เวลาเป็นเวลาไทย")
 
 
-# ================= Buffett Indicator (ตลาดรวม) =================
-with tab_market:
-    st.markdown("### 🇺🇸 Buffett Indicator (มูลค่าตลาดหุ้น ÷ GDP)")
-    bi_view = st.radio("ดูของ", ["ตลาดหุ้นสหรัฐทั้งตลาด", "S&P 500"], horizontal=True, key="bi_view",
-                       help="ทั้งตลาด = มูลค่าหุ้นบริษัทนอกภาคการเงินทั้งหมด (Fed Z.1) · "
-                            "S&P 500 = มูลค่าตลาดรวมของ 500 บริษัทใหญ่ (รวมธนาคาร/ประกัน)")
-    with st.expander("📘 วิธีแปลผล Buffett Indicator"):
-        st.markdown(guides.INDICATOR)
-    try:
-        with st.spinner("กำลังโหลดข้อมูล Buffett Indicator…"):
-            bi_df, bi_src = load_buffett_indicator(BI_FILE.stat().st_mtime if BI_FILE.exists() else 0.0)
-        if bi_view == "S&P 500":
-            sp = sp500_indicator(bi_df)
-            if sp is None:
-                st.info("ต้องใช้ข้อมูลมูลค่าตลาดจาก Screener รอบใหม่ — รอรอบอัตโนมัติวันเสาร์ "
-                        "หรือกด Run workflow ใน GitHub Actions")
-            else:
-                show_indicator(
-                    sp["series"], sp["est"], zones=False, unit="เดือน", color="#a855f7",
-                    official=(f"มูลค่าตลาด S&P 500 ({sp['anchor_date']})", f"${sp['anchor_mcap_tn']:,.1f}T"),
-                    caption=(f"มูลค่าตลาดรวม {sp['n']} บริษัทใน S&P 500 จาก Screener วันที่ {sp['anchor_date']} "
-                             f"(หุ้นหลาย class นับครั้งเดียว) ÷ GDP ล่าสุด ${sp['gdp_tn']:,.1f}T · "
-                             "ค่าย้อนหลังประมาณจากระดับดัชนี S&P 500 (^GSPC) รายเดือน เทียบกับวันที่มีมูลค่าจริง "
-                             "จึงคลาดเคลื่อนได้ช่วงที่ห่างจากปัจจุบันมาก · ไม่มีเกณฑ์ 75/90/115/135% "
-                             "เพราะเกณฑ์นั้นทำไว้สำหรับตลาดรวม ให้เทียบกับค่าเฉลี่ยและ SD ของตัวเองแทน"))
-        else:
-            bi = bi_df["ratio"]
-            q_end = bi.index[-1] + pd.offsets.QuarterEnd(0)
-            vti = get_history("VTI", "2y", "1d", False)["Close"]
-            vti.index = vti.index.tz_localize(None)
-            at_qend = vti[vti.index <= q_end]
-            est = float(bi.iloc[-1] * vti.iloc[-1] / at_qend.iloc[-1]) if len(at_qend) else float(bi.iloc[-1])
-            show_indicator(
-                bi, est, zones=True, unit="ไตรมาส", color="#3b82f6",
-                official=(f"ข้อมูลทางการล่าสุด ({q_end:%b %Y})", f"{bi.iloc[-1]:.0f}%"),
-                caption=(f"ข้อมูลจาก{bi_src} · ที่มา: Federal Reserve Z.1 มูลค่าหุ้นบริษัทนอกภาคการเงิน (FL103164105) "
-                         "÷ GDP ของ BEA ผ่าน DBnomics · ข้อมูลรายไตรมาส ประกาศช้า ~3 เดือน "
-                         "ค่าปัจจุบันจึงประมาณจากการเปลี่ยนแปลงราคา VTI (ทั้งตลาด) หลังสิ้นไตรมาส · "
-                         "เกณฑ์ 75/90/115/135% มาจาก Buffett ปี 2001 แต่ค่านี้มีแนวโน้มสูงขึ้นตามเวลา "
-                         "(บริษัทมีรายได้ต่างประเทศมากขึ้น ดอกเบี้ยต่ำลง) จึงควรดูประกอบกับค่าเฉลี่ยและ SD"))
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"โหลดข้อมูล Buffett Indicator ไม่สำเร็จ ({type(e).__name__}) — ไปที่ GitHub → Actions → "
-                   "Run workflow เพื่อบันทึกข้อมูลลง repo แล้วรอ 15 นาที")
-
-
 # ================= Screener (S&P 500) =================
 with tab_screener:
     st.markdown("### 🔍 Buffett Screener — S&P 500")
@@ -1035,7 +989,7 @@ with tab_screener:
             },
         )
 
-        add_pick = st.multiselect("เลือกหุ้นเพื่อเพิ่มเข้า Watchlist แล้วดูรายละเอียดในแท็บ 📈 กราฟ + Buffett",
+        add_pick = st.multiselect("เลือกหุ้นเพื่อเพิ่มเข้า Watchlist แล้วดูรายละเอียดในแท็บ 📈 Data",
                                   [t for t in view["ticker"] if t not in st.session_state.watchlist],
                                   key="sc_add")
         if st.button("➕ เพิ่มเข้า Watchlist", disabled=not add_pick, key="sc_add_btn"):
@@ -1045,6 +999,52 @@ with tab_screener:
             st.rerun()
         st.caption("ใช้คัดกรองเบื้องต้นเท่านั้น ตัวเลขมาจาก Yahoo Finance อาจคลาดเคลื่อน "
                    "ควรเปิดดูรายละเอียดในแท็บ 📈 กราฟ (ส่วน Buffett ใต้กราฟ) ก่อนตัดสินใจ · ไม่ใช่คำแนะนำการลงทุน")
+
+
+# ================= Buffett Indicator (ตลาดรวม) =================
+with tab_screener:
+    st.divider()
+    st.markdown("### 🇺🇸 Buffett Indicator (มูลค่าตลาดหุ้น ÷ GDP)")
+    bi_view = st.radio("ดูของ", ["ตลาดหุ้นสหรัฐทั้งตลาด", "S&P 500"], horizontal=True, key="bi_view",
+                       help="ทั้งตลาด = มูลค่าหุ้นบริษัทนอกภาคการเงินทั้งหมด (Fed Z.1) · "
+                            "S&P 500 = มูลค่าตลาดรวมของ 500 บริษัทใหญ่ (รวมธนาคาร/ประกัน)")
+    with st.expander("📘 วิธีแปลผล Buffett Indicator"):
+        st.markdown(guides.INDICATOR)
+    try:
+        with st.spinner("กำลังโหลดข้อมูล Buffett Indicator…"):
+            bi_df, bi_src = load_buffett_indicator(BI_FILE.stat().st_mtime if BI_FILE.exists() else 0.0)
+        if bi_view == "S&P 500":
+            sp = sp500_indicator(bi_df)
+            if sp is None:
+                st.info("ต้องใช้ข้อมูลมูลค่าตลาดจาก Screener รอบใหม่ — รอรอบอัตโนมัติวันเสาร์ "
+                        "หรือกด Run workflow ใน GitHub Actions")
+            else:
+                show_indicator(
+                    sp["series"], sp["est"], zones=False, unit="เดือน", color="#a855f7",
+                    official=(f"มูลค่าตลาด S&P 500 ({sp['anchor_date']})", f"${sp['anchor_mcap_tn']:,.1f}T"),
+                    caption=(f"มูลค่าตลาดรวม {sp['n']} บริษัทใน S&P 500 จาก Screener วันที่ {sp['anchor_date']} "
+                             f"(หุ้นหลาย class นับครั้งเดียว) ÷ GDP ล่าสุด ${sp['gdp_tn']:,.1f}T · "
+                             "ค่าย้อนหลังประมาณจากระดับดัชนี S&P 500 (^GSPC) รายเดือน เทียบกับวันที่มีมูลค่าจริง "
+                             "จึงคลาดเคลื่อนได้ช่วงที่ห่างจากปัจจุบันมาก · ไม่มีเกณฑ์ 75/90/115/135% "
+                             "เพราะเกณฑ์นั้นทำไว้สำหรับตลาดรวม ให้เทียบกับค่าเฉลี่ยและ SD ของตัวเองแทน"))
+        else:
+            bi = bi_df["ratio"]
+            q_end = bi.index[-1] + pd.offsets.QuarterEnd(0)
+            vti = get_history("VTI", "2y", "1d", False)["Close"]
+            vti.index = vti.index.tz_localize(None)
+            at_qend = vti[vti.index <= q_end]
+            est = float(bi.iloc[-1] * vti.iloc[-1] / at_qend.iloc[-1]) if len(at_qend) else float(bi.iloc[-1])
+            show_indicator(
+                bi, est, zones=True, unit="ไตรมาส", color="#3b82f6",
+                official=(f"ข้อมูลทางการล่าสุด ({q_end:%b %Y})", f"{bi.iloc[-1]:.0f}%"),
+                caption=(f"ข้อมูลจาก{bi_src} · ที่มา: Federal Reserve Z.1 มูลค่าหุ้นบริษัทนอกภาคการเงิน (FL103164105) "
+                         "÷ GDP ของ BEA ผ่าน DBnomics · ข้อมูลรายไตรมาส ประกาศช้า ~3 เดือน "
+                         "ค่าปัจจุบันจึงประมาณจากการเปลี่ยนแปลงราคา VTI (ทั้งตลาด) หลังสิ้นไตรมาส · "
+                         "เกณฑ์ 75/90/115/135% มาจาก Buffett ปี 2001 แต่ค่านี้มีแนวโน้มสูงขึ้นตามเวลา "
+                         "(บริษัทมีรายได้ต่างประเทศมากขึ้น ดอกเบี้ยต่ำลง) จึงควรดูประกอบกับค่าเฉลี่ยและ SD"))
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"โหลดข้อมูล Buffett Indicator ไม่สำเร็จ ({type(e).__name__}) — ไปที่ GitHub → Actions → "
+                   "Run workflow เพื่อบันทึกข้อมูลลง repo แล้วรอ 15 นาที")
 
 
 # ================= แจ้งเตือนราคา =================
