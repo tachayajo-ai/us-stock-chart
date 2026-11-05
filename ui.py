@@ -108,6 +108,9 @@ label[data-testid="stRadioOption"][data-selected="true"] p { color: #fff !import
 .ck-res { white-space:nowrap; font-size:.9rem; }
 .ck-val { margin-top:2px; font-variant-numeric: tabular-nums; }
 .ck-rule, .ck-why { color: var(--muted); font-size:.82rem; margin-top:2px; }
+.ck-mean { font-size:.88rem; margin-top:4px; }
+.ck-mean.pass { color:#86efac; }
+.ck-mean.fail { color:#fca5a5; }
 </style>
 """
 
@@ -175,7 +178,9 @@ def checklist(rows: list[dict]) -> str:
             f'<span class="ck-name">{_h(r["หลักเกณฑ์"])}</span><span class="ck-res">{_h(r["ผล"])}</span></div>'
             f'<div class="ck-val">{_h(r["ค่าจริง"])}</div>'
             f'<div class="ck-rule">เกณฑ์: {_h(r["เกณฑ์ผ่าน"])}</div>'
-            + (f'<div class="ck-why">{_h(r["ทำไมสำคัญ"])}</div>' if r.get("ทำไมสำคัญ") else "")
+            + (f'<div class="ck-mean {r.get("_s", "")}">{_h(r["ความหมาย"])}</div>' if r.get("ความหมาย") else "")
+            + (f'<div class="ck-why">{"ข้อนี้สำคัญเพราะ: " if r.get("_s") == "fail" else ""}{_h(r["ทำไมสำคัญ"])}</div>'
+               if r.get("ทำไมสำคัญ") and r.get("_s") != "pass" else "")
             + "</div>")
     out.append("</div>")
     return "".join(out)

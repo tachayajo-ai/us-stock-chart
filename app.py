@@ -25,7 +25,7 @@ import alerts as alerts_mod  # noqa: E402
 import portfolio as pf  # noqa: E402
 import ui  # noqa: E402
 from buffett import (BASIS_OE, buffett_checks, build_buffett_indicator, current_price, dcf_options, default_growth,
-                     implied_growth,
+                     explain, implied_growth,
                      fetch_fundamentals, fmt_money, is_company, price_to_book, share_count,
                      valuation_rows)
 
@@ -873,7 +873,7 @@ with tab_chart:
                                f"(ที่ discount rate {dr:.1%}) · สมมติฐาน DCF ตอนนี้ {g:.1%} — {note}")
 
         # การ์ดเรียงลงมาแทนตาราง: บนมือถือตารางต้องเลื่อนซ้ายขวาและคอลัมน์ทับกัน
-        st.markdown(ui.checklist(rows), unsafe_allow_html=True)
+        st.markdown(ui.checklist(explain(rows)), unsafe_allow_html=True)
         with st.expander("📘 วิธีแปลผล Buffett checklist"):
             st.markdown(guides.CHECKLIST)
             if extra.get("financial"):
