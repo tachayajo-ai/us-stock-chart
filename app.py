@@ -440,32 +440,35 @@ with tab_chart:
                       f"{(float(df['Close'].iloc[-1]) / first_c - 1) * 100:+.2f}%")
         h2.metric("สูงสุดในช่วง", f"${df['High'].max():,.2f}")
         h3.metric("ต่ำสุดในช่วง", f"${df['Low'].min():,.2f}")
+        # เวลานิวยอร์กแบบไม่มี offset: เวลา ET เปลี่ยน -04:00 ↔ -05:00 ตอนปรับ daylight saving
+        # ถ้าส่ง offset ให้ Plotly แกนเวลา + rangebreaks คลาดและแท่งท้าย ๆ หลุดขอบกราฟ
+        xs = df.index.tz_convert(ET).tz_localize(None) if df.index.tz is not None else df.index
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                             row_heights=[0.78, 0.22], vertical_spacing=0.03)
         if style == "Candle":
             fig.add_trace(go.Candlestick(
-                x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+                x=xs, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
                 name=ticker, increasing_line_color="#16a34a", decreasing_line_color="#dc2626"),
                 row=1, col=1)
         else:
-            fig.add_trace(go.Scatter(x=df.index, y=df["Close"], mode="lines", name=ticker,
+            fig.add_trace(go.Scatter(x=xs, y=df["Close"], mode="lines", name=ticker,
                                      line=dict(width=1.6, color="#2563eb")), row=1, col=1)
 
         if show_ma and not prepost:
             for n, color in ((50, "#f59e0b"), (200, "#8b5cf6")):
                 if len(df) > n:
-                    fig.add_trace(go.Scatter(x=df.index, y=df["Close"].rolling(n).mean(),
+                    fig.add_trace(go.Scatter(x=xs, y=df["Close"].rolling(n).mean(),
                                              mode="lines", name=f"MA{n}",
                                              line=dict(width=1.2, color=color)), row=1, col=1)
 
         vol_colors = ["#16a34a" if c >= o else "#dc2626" for o, c in zip(df["Open"], df["Close"])]
-        fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=vol_colors,
+        fig.add_trace(go.Bar(x=xs, y=df["Volume"], marker_color=vol_colors,
                              name="Volume", opacity=0.6), row=2, col=1)
 
         # แรเงาช่วง pre-market / after-hours บนกราฟ intraday
         if prepost:
-            for day in sorted(set(df.index.date)):
-                d = pd.Timestamp(day, tz=ET)
+            for day in sorted(set(xs.date)):
+                d = pd.Timestamp(day)
                 for start, end in ((time(4, 0), time(9, 30)), (time(16, 0), time(20, 0))):
                     fig.add_vrect(x0=d.replace(hour=start.hour, minute=start.minute),
                                   x1=d.replace(hour=end.hour, minute=end.minute),
@@ -477,9 +480,12 @@ with tab_chart:
         else:
             breaks = []
 
-        fig.update_xaxes(rangebreaks=breaks, rangeslider_visible=False)
+        # กำหนดช่วงแกน X เอง: autorange ของ Plotly เมื่อมี rangebreaks (ซ่อนเสาร์-อาทิตย์) ตัดแท่งท้าย ๆ หายไป
+        step = xs.to_series().diff().median() if len(df) > 1 else pd.Timedelta(days=1)
+        fig.update_xaxes(rangebreaks=breaks, rangeslider_visible=False,
+                         range=[xs[0] - step * 0.6, xs[-1] + step * 0.6])
         fig.update_yaxes(type="log" if log else "linear", row=1, col=1, title="USD")
-        fig.update_layout(height=440, margin=dict(l=6, r=6, t=8, b=6),
+        fig.update_layout(height=440, margin=dict(l=10, r=12, t=10, b=8),
                           hovermode="x unified", legend=dict(orientation="h", y=1.02),
                           dragmode="pan")
         st.plotly_chart(fig, width="stretch",

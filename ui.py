@@ -48,7 +48,9 @@ label[data-testid="stRadioOption"][data-selected="true"] p { color: #fff !import
 [data-testid="stExpander"] summary { font-weight: 600; }
 [data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
 .stButton > button, .stFormSubmitButton > button { border-radius: 12px; }
-[data-testid="stPlotlyChart"] { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; }
+/* กรอบกราฟ: ห้ามใช้ padding/border เพราะ Plotly กว้างเท่ากล่องเต็ม → ขอบขวาล้นและแท่งท้าย ๆ ถูกตัด
+   ใช้ box-shadow เป็นเส้นขอบแทน (ไม่กินพื้นที่) */
+[data-testid="stPlotlyChart"] { background: var(--card); box-shadow: 0 0 0 1px var(--border); border-radius: var(--radius); padding: 0; overflow: hidden; }
 [data-testid="stAlert"] { border-radius: 12px; }
 
 /* ---- Watchlist (แท็บ ⭐) ---- */

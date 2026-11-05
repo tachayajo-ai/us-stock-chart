@@ -36,6 +36,7 @@ Notes for Claude sessions working on this repo. The user-facing Thai manual is `
 - Foreign ADRs (PDD, TSM, ASML…) report statements in home currency (`financialCurrency` ≠ `currency`) → `to_trading_currency()` in `fetch_fundamentals` converts money columns via `{FIN}{CUR}=X`; if no FX rate, statements are dropped (not evaluated).
 - Financials (banks/insurers/brokers/lenders by Yahoo `industry`; V/MA/PYPL excluded) get no DCF/MOS; show P/B + ROE.
 - DCF default growth is conservative: 0% if any negative cash-flow year, else min(cash-flow CAGR on 2-yr rolling mean, revenue CAGR), capped 10%.
+- Chart frames: never give `[data-testid="stPlotlyChart"]` padding/border (Plotly takes the element's full width → right edge overflows and last candles get clipped); use box-shadow. Price chart x-values are naive ET (`tz_localize(None)`) so DST offset changes don't confuse rangebreaks.
 - Watchlist must keep ≥1 item (empty list used to stop the whole app).
 - This sandbox cannot reach Yahoo/FRED/ntfy; test with a mocked `yfinance` (`sys.modules["yfinance"] = SimpleNamespace(Ticker=Fake, download=...)`) via `streamlit.testing.v1.AppTest`, and visually with `streamlit run` + Playwright screenshots. Verify real data by reading committed CSVs or Actions logs (`gh run view <id> --log`).
 - `git push` can race with the Actions bot: `git fetch && git rebase origin/main` before pushing; retry.
