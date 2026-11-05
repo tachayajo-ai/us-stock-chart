@@ -26,7 +26,38 @@ def fetch_fundamentals(ticker: str) -> dict:
             out[key] = clean(getattr(t, attr))
         except Exception:
             out[key] = pd.DataFrame()
-    return out
+    return to_trading_currency(out)
+
+
+NON_MONEY = ("Shares", "Share Issued", "Tax Rate")  # คอลัมน์ที่ไม่ใช่จำนวนเงิน (ไม่ต้องแปลงสกุล)
+
+
+def to_trading_currency(f: dict) -> dict:
+    """หุ้นต่างชาติ (ADR เช่น PDD, TSM) งบเป็นสกุลเงินบ้านเกิด (CNY, TWD) แต่ราคาเป็น USD
+    → แปลงตัวเลขเงินในงบเป็นสกุลเดียวกับราคา ไม่งั้น DCF/MOS เพี้ยนหลายเท่า
+    ถ้าหาอัตราแลกเปลี่ยนไม่ได้ ให้ล้างงบทิ้ง (ไม่ประเมิน) ดีกว่าแสดงตัวเลขผิด"""
+    info = f["info"]
+    fin, cur = info.get("financialCurrency"), info.get("currency")
+    if not fin or not cur or fin == cur:
+        return f
+    rate = None
+    try:
+        rate = float(yf.Ticker(f"{fin}{cur}=X").history(period="5d")["Close"].dropna().iloc[-1])
+    except Exception:
+        pass
+    if not rate or rate <= 0:
+        info["_fx_note"] = f"งบเป็น {fin} แต่ราคาเป็น {cur} และหาอัตราแลกเปลี่ยนไม่ได้ — ไม่ประเมิน"
+        for k in ("inc", "bal", "cf"):
+            f[k] = pd.DataFrame()
+        return f
+    for k in ("inc", "bal", "cf"):
+        df = f[k]
+        if df.empty:
+            continue
+        money = [c for c in df.columns if not any(s in str(c) for s in NON_MONEY)]
+        df[money] = df[money].apply(pd.to_numeric, errors="coerce") * rate
+    info["_fx_note"] = f"งบการเงินเป็น {fin} แปลงเป็น {cur} ที่ 1 {fin} = {rate:.4g} {cur}"
+    return f
 
 
 def _col(df: pd.DataFrame, *names):

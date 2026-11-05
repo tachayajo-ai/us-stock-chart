@@ -802,6 +802,8 @@ with tab_chart:
     qtype = str(info.get("quoteType", "")).upper()
 
     if not is_company(f):
+        if info.get("_fx_note"):
+            st.caption(f"💱 {info['_fx_note']}")
         st.info(f"{b_ticker} เป็น {qtype or 'กองทุน/ดัชนี'} หรือไม่มีงบการเงิน — Buffett checklist ใช้ได้เฉพาะหุ้นรายบริษัท "
                 "ดู Buffett Indicator ของตลาดรวมท้ายแท็บ 🔍 Screener แทน")
     else:
@@ -841,7 +843,8 @@ with tab_chart:
         applicable = sum(r["_s"] != "na" for r in rows)
         with summary:
             st.caption(f"{info.get('shortName', b_ticker)} · {info.get('sector', '')} · "
-                       f"งบการเงินรายปี {f['inc'].index.min()}–{f['inc'].index.max()} (Yahoo Finance)")
+                       f"งบการเงินรายปี {f['inc'].index.min()}–{f['inc'].index.max()} (Yahoo Finance)"
+                       + (f" · 💱 {info['_fx_note']}" if info.get("_fx_note") else ""))
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("คะแนน Buffett", f"{passed}/{applicable}",
                       help="นับเฉพาะข้อที่ประเมินได้ (ไม่รวม N/A)")

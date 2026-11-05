@@ -33,6 +33,7 @@ Notes for Claude sessions working on this repo. The user-facing Thai manual is `
 - Two `$` in one Markdown string render as LaTeX → wrap with `esc_dollar()`. `md_safe()` also replaces `[ ]`.
 - Do not set `st.session_state[key]` after its widget is created (use a `*_next` key consumed before the widget).
 - yfinance quirks: `priceToBook` wrong for multi-class shares (use `price_to_book()`), `sharesOutstanding` per class (use `share_count()` = marketCap/price), `Change In Working Capital` unreliable (Owner Earnings uses OCF).
+- Foreign ADRs (PDD, TSM, ASML…) report statements in home currency (`financialCurrency` ≠ `currency`) → `to_trading_currency()` in `fetch_fundamentals` converts money columns via `{FIN}{CUR}=X`; if no FX rate, statements are dropped (not evaluated).
 - Financials (banks/insurers/brokers/lenders by Yahoo `industry`; V/MA/PYPL excluded) get no DCF/MOS; show P/B + ROE.
 - DCF default growth is conservative: 0% if any negative cash-flow year, else min(cash-flow CAGR on 2-yr rolling mean, revenue CAGR), capped 10%.
 - Watchlist must keep ≥1 item (empty list used to stop the whole app).
