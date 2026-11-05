@@ -253,8 +253,8 @@ def quote_label(t: str) -> str:
     return f"{t}   ${px_:,.2f}   {'▲' if pc_ > 0 else '▼' if pc_ < 0 else '•'}{abs(pc_):.2f}%"
 
 
-(tab_chart, tab_watch, tab_overview, tab_compare, tab_company, tab_screener, tab_alerts, tab_port,
- tab_manual) = st.tabs(["📈 กราฟ + Buffett", "⭐ Watchlist", "📋 ภาพรวม", "⚖️ เปรียบเทียบ", "🏢 บริษัท",
+(tab_chart, tab_watch, tab_compare, tab_market, tab_screener, tab_alerts, tab_port,
+ tab_manual) = st.tabs(["📈 กราฟ + Buffett", "⭐ Watchlist", "⚖️ เปรียบเทียบ", "🇺🇸 Buffett Indicator",
                         "🔍 Screener", "🔔 แจ้งเตือน", "💼 พอร์ต", "📖 คู่มือ"])
 
 # ---------------- tab: watchlist ----------------
@@ -448,34 +448,6 @@ with tab_chart:
     with st.expander("📘 วิธีอ่านกราฟ"):
         st.markdown(guides.CHART)
 
-# ---------------- tab: overview ----------------
-with tab_overview:
-    rows = []
-    with st.spinner("กำลังโหลดราคา…"):
-        for t in wl:
-            q = get_quote(t)
-            rows.append({
-                "Symbol": t,
-                "ปิดล่าสุด": q.get("close"),
-                "% วันนี้": q.get("chg_pct"),
-                "Pre/After": q.get("ext_price"),
-                "% Pre/After": q.get("ext_chg_pct"),
-                "เวลา (ET)": q["ext_time"].strftime("%H:%M") if "ext_time" in q else "",
-            })
-    table = pd.DataFrame(rows).set_index("Symbol")
-
-    def color(v):
-        if pd.isna(v):
-            return ""
-        return "color:#16a34a" if v > 0 else "color:#dc2626" if v < 0 else ""
-
-    st.dataframe(
-        table.style.format({"ปิดล่าสุด": "${:,.2f}", "Pre/After": "${:,.2f}",
-                            "% วันนี้": "{:+.2f}%", "% Pre/After": "{:+.2f}%"}, na_rep="—")
-        .map(color, subset=["% วันนี้", "% Pre/After"]),
-        width="stretch",
-    )
-
 # ---------------- tab: compare ----------------
 with tab_compare:
     picks = st.multiselect("เลือก symbol", wl, default=wl[: min(3, len(wl))])
@@ -505,6 +477,47 @@ with tab_compare:
         st.plotly_chart(fig, width="stretch")
         if series:
             st.caption(f"เริ่มนับพร้อมกันที่ {start:%Y-%m-%d} (วันแรกที่ทุกตัวมีข้อมูล)")
+
+
+# ================= บริษัท: profile / ข่าว / earnings =================
+BKK = "Asia/Bangkok"
+
+
+def _translate_key():
+    try:
+        return st.secrets["GOOGLE_TRANSLATE_API_KEY"]
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=7 * 24 * 3600, show_spinner=False)
+def translate_cached(text: str) -> str:
+    return translate(text, "th", _translate_key())
+
+
+@st.cache_data(ttl=7 * 24 * 3600, show_spinner=False)
+def translate_lines_cached(lines: tuple[str, ...]) -> list[str]:
+    return translate_lines(list(lines), "th", _translate_key())
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_news(ticker: str, name: str) -> list[dict]:
+    return fetch_news(ticker, name)
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def get_earnings(ticker: str) -> dict:
+    return fetch_earnings(ticker)
+
+
+def esc_dollar(s: str) -> str:
+    """$ สองตัวในข้อความ Markdown ถูกตีความเป็นสูตรคณิตศาสตร์ → escape ให้แสดงเป็นเครื่องหมายดอลลาร์"""
+    return str(s).replace("\\$", "$").replace("$", "\\$")  # กัน escape ซ้ำกับ md_safe
+
+
+def md_safe(s: str) -> str:
+    """กัน $ ถูกตีความเป็นสูตร และ [ ] ทำลิงก์เพี้ยน"""
+    return str(s).replace("$", "\\$").replace("[", "(").replace("]", ")")
 
 
 # ================= Buffett =================
@@ -649,8 +662,77 @@ def analyst_package(ticker, f, rows, extra, price, iv, mos, passed, applicable,
     return "\n".join(x for x in lines if x is not None)
 
 
-# Buffett ต่อท้ายใต้กราฟในแท็บเดียวกัน (หุ้นตัวเดียวกับกราฟ)
+# ข้อมูลบริษัท + Buffett + ข่าว ต่อท้ายใต้กราฟในแท็บเดียวกัน (หุ้นตัวเดียวกับกราฟ)
 with tab_chart:
+    st.divider()
+    c_ticker = st.session_state.selected
+    with st.spinner("กำลังโหลดข้อมูลบริษัท…"):
+        cinfo = get_fundamentals(c_ticker)["info"]
+    cname = cinfo.get("longName") or cinfo.get("shortName") or c_ticker
+    is_fund = str(cinfo.get("quoteType", "")).upper() in ("ETF", "MUTUALFUND")
+    st.markdown(f"### 🏢 {md_safe(cname)}")
+    emp = cinfo.get("fullTimeEmployees")
+    facts = [cinfo.get("sector"), cinfo.get("industry"), cinfo.get("category"), cinfo.get("country"),
+             f"พนักงาน {emp:,} คน" if emp else None]
+    st.caption(" · ".join(x for x in facts if x))
+    k1, k2, k3 = st.columns(3)
+    mc = cinfo.get("marketCap") or cinfo.get("totalAssets")
+    k1.metric("ขนาดกองทุน" if is_fund else "มูลค่าตลาด", fmt_money(mc) if mc else "—")
+    pe = cinfo.get("trailingPE")
+    k2.metric("P/E (12 เดือนล่าสุด)", f"{pe:.1f} เท่า" if pe else "—")
+    beta = cinfo.get("beta") or cinfo.get("beta3Year")
+    k3.metric("Beta", f"{beta:.2f}" if beta else "—", help="ความผันผวนเทียบตลาด: 1 = เท่าตลาด, >1 = ผันผวนกว่า")
+    if cinfo.get("website"):
+        st.markdown(f"🌐 [{cinfo['website']}]({cinfo['website']})")
+
+    # ---- Profile: ซ่อนไว้ทั้งไทยและอังกฤษ ----
+    summary = (cinfo.get("longBusinessSummary") or "").strip()
+    if not summary:
+        st.caption("Yahoo Finance ไม่มีคำอธิบายของหุ้นตัวนี้")
+    else:
+        with st.expander("📄 ข้อมูลบริษัท (ภาษาไทย)"):
+            try:
+                st.markdown(md_safe(translate_cached(summary)))
+                st.caption("แปลอัตโนมัติด้วย Google Translate — ชื่อเฉพาะและศัพท์การเงินอาจแปลไม่ตรง")
+            except Exception as e:  # noqa: BLE001
+                st.warning(f"แปลไม่สำเร็จ ({type(e).__name__}) — ดูต้นฉบับภาษาอังกฤษแทน")
+        with st.expander("📄 Company profile (English)"):
+            st.markdown(md_safe(summary))
+    # ---- Earnings (ซ่อนใน expander · ETF ไม่มีประกาศงบ) ----
+    if not is_fund:
+        with st.expander("🎙️ Earnings call และผลประกาศงบ"):
+            with st.spinner("กำลังโหลดข้อมูลงบ…"):
+                ern = get_earnings(c_ticker)
+            e1, e2 = st.columns(2)
+            nxt = ern.get("next")
+            if nxt:
+                days = (pd.Timestamp(nxt) - pd.Timestamp.now().normalize()).days
+                e1.metric("ประกาศงบครั้งถัดไป (เวลาสหรัฐ)", f"{pd.Timestamp(nxt):%d/%m/%Y}",
+                          f"อีก {days} วัน" if days >= 0 else "ผ่านมาแล้ว", delta_color="off")
+            else:
+                e1.metric("ประกาศงบครั้งถัดไป", "—")
+            est_eps = ern.get("eps_est")
+            e2.metric("EPS ที่นักวิเคราะห์คาด", f"${est_eps:.2f}" if est_eps is not None and pd.notna(est_eps) else "—")
+            hist = ern.get("history")
+            if hist is not None and not hist.empty:
+                h = pd.DataFrame({
+                    "วันประกาศ": [f"{d:%d/%m/%Y}" for d in hist.index],
+                    "EPS คาด": hist["EPS Estimate"].values,
+                    "EPS จริง": hist["Reported EPS"].values,
+                    "Surprise %": hist["Surprise(%)"].values if "Surprise(%)" in hist.columns else None,
+                })
+                h["ผล"] = ["✅ ดีกว่าคาด" if s > 0 else "❌ แย่กว่าคาด" if s < 0 else "➖ ตามคาด" if pd.notna(s) else ""
+                          for s in pd.to_numeric(h["Surprise %"], errors="coerce")]
+                st.dataframe(h, hide_index=True, width="stretch", column_config={
+                    "EPS คาด": st.column_config.NumberColumn(format="$%.2f"),
+                    "EPS จริง": st.column_config.NumberColumn(format="$%.2f"),
+                    "Surprise %": st.column_config.NumberColumn(format="%+.1f%%")})
+            st.markdown("**ฟัง / อ่าน earnings call**")
+            for label, url, desc in earnings_links(c_ticker, cinfo):
+                st.markdown(f"- **[{label}]({url})** — {desc}")
+        with st.expander("📘 วิธีอ่านผลงบและฟัง earnings call"):
+            st.markdown(guides.EARNINGS)
+
     st.divider()
     b_ticker = st.session_state.selected
     st.markdown(f"### 🎩 Buffett checklist — {b_ticker}")
@@ -661,7 +743,7 @@ with tab_chart:
 
     if not is_company(f):
         st.info(f"{b_ticker} เป็น {qtype or 'กองทุน/ดัชนี'} หรือไม่มีงบการเงิน — Buffett checklist ใช้ได้เฉพาะหุ้นรายบริษัท "
-                "ดู Buffett Indicator ของตลาดรวมด้านล่างแทน")
+                "ดู Buffett Indicator ของตลาดรวมในแท็บ 🇺🇸 Buffett Indicator แทน")
     else:
         rows, extra = buffett_checks(f)
         price = current_price(info) or get_quote(b_ticker).get("close")
@@ -787,8 +869,32 @@ with tab_chart:
         st.caption("ข้อที่ระบบประเมินไม่ได้แต่ Buffett ให้ความสำคัญ: เข้าใจธุรกิจไหม · มี moat ยั่งยืนไหม · "
                    "ผู้บริหารซื่อตรงและจัดสรรเงินเก่งไหม — ต้องประเมินเอง · ไม่ใช่คำแนะนำการลงทุน")
 
-    # ---------- Market Buffett Indicator ----------
+    # ---- News (ท้ายสุดของแท็บกราฟ) ----
     st.divider()
+    st.markdown("#### 📰 ข่าวล่าสุด")
+    with st.spinner("กำลังโหลดข่าว…"):
+        news = get_news(c_ticker, cinfo.get("shortName") or c_ticker)
+    if not news:
+        st.info("ไม่พบข่าวของหุ้นตัวนี้")
+    else:
+        th_titles = None
+        if st.toggle("แปลหัวข้อข่าวเป็นไทย", value=True, key="news_th"):
+            try:
+                with st.spinner("กำลังแปลหัวข้อข่าว…"):
+                    th_titles = translate_lines_cached(tuple(n["title"] for n in news))
+            except Exception as e:  # noqa: BLE001
+                st.caption(f"แปลหัวข้อข่าวไม่สำเร็จ ({type(e).__name__}) — แสดงต้นฉบับ")
+        for i, n in enumerate(news):
+            when = pd.Timestamp(n["time"]).tz_convert(BKK).strftime("%d/%m/%Y %H:%M น.") if n["time"] else ""
+            title = th_titles[i] if th_titles and th_titles[i] else n["title"]
+            st.markdown(f"**[{md_safe(title)}]({n['url']})**  \n"
+                        + (f"{md_safe(n['title'])}  \n" if th_titles else "")
+                        + f"<small>{md_safe(n['source'])} · {when}</small>", unsafe_allow_html=True)
+        st.caption("กดหัวข้อเพื่ออ่านข่าวต้นฉบับ · แหล่งข่าว: Yahoo Finance (สำรอง: Google News) · เวลาเป็นเวลาไทย")
+
+
+# ================= Buffett Indicator (ตลาดรวม) =================
+with tab_market:
     st.markdown("### 🇺🇸 Buffett Indicator (มูลค่าตลาดหุ้น ÷ GDP)")
     bi_view = st.radio("ดูของ", ["ตลาดหุ้นสหรัฐทั้งตลาด", "S&P 500"], horizontal=True, key="bi_view",
                        help="ทั้งตลาด = มูลค่าหุ้นบริษัทนอกภาคการเงินทั้งหมด (Fed Z.1) · "
@@ -939,147 +1045,6 @@ with tab_screener:
             st.rerun()
         st.caption("ใช้คัดกรองเบื้องต้นเท่านั้น ตัวเลขมาจาก Yahoo Finance อาจคลาดเคลื่อน "
                    "ควรเปิดดูรายละเอียดในแท็บ 📈 กราฟ (ส่วน Buffett ใต้กราฟ) ก่อนตัดสินใจ · ไม่ใช่คำแนะนำการลงทุน")
-
-
-# ================= บริษัท: profile / ข่าว / earnings =================
-BKK = "Asia/Bangkok"
-
-
-def _translate_key():
-    try:
-        return st.secrets["GOOGLE_TRANSLATE_API_KEY"]
-    except Exception:
-        return None
-
-
-@st.cache_data(ttl=7 * 24 * 3600, show_spinner=False)
-def translate_cached(text: str) -> str:
-    return translate(text, "th", _translate_key())
-
-
-@st.cache_data(ttl=7 * 24 * 3600, show_spinner=False)
-def translate_lines_cached(lines: tuple[str, ...]) -> list[str]:
-    return translate_lines(list(lines), "th", _translate_key())
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def get_news(ticker: str, name: str) -> list[dict]:
-    return fetch_news(ticker, name)
-
-
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
-def get_earnings(ticker: str) -> dict:
-    return fetch_earnings(ticker)
-
-
-def esc_dollar(s: str) -> str:
-    """$ สองตัวในข้อความ Markdown ถูกตีความเป็นสูตรคณิตศาสตร์ → escape ให้แสดงเป็นเครื่องหมายดอลลาร์"""
-    return str(s).replace("\\$", "$").replace("$", "\\$")  # กัน escape ซ้ำกับ md_safe
-
-
-def md_safe(s: str) -> str:
-    """กัน $ ถูกตีความเป็นสูตร และ [ ] ทำลิงก์เพี้ยน"""
-    return str(s).replace("$", "\\$").replace("[", "(").replace("]", ")")
-
-
-with tab_company:
-    c_ticker = st.selectbox("เลือกหุ้น / ETF", wl, index=wl.index(st.session_state.selected), key="company_ticker")
-    with st.spinner("กำลังโหลดข้อมูลบริษัท…"):
-        cinfo = get_fundamentals(c_ticker)["info"]
-    cname = cinfo.get("longName") or cinfo.get("shortName") or c_ticker
-    is_fund = str(cinfo.get("quoteType", "")).upper() in ("ETF", "MUTUALFUND")
-    st.markdown(f"### {md_safe(cname)} ({c_ticker})")
-    emp = cinfo.get("fullTimeEmployees")
-    facts = [cinfo.get("sector"), cinfo.get("industry"), cinfo.get("category"), cinfo.get("country"),
-             f"พนักงาน {emp:,} คน" if emp else None]
-    st.caption(" · ".join(x for x in facts if x))
-    k1, k2, k3 = st.columns(3)
-    mc = cinfo.get("marketCap") or cinfo.get("totalAssets")
-    k1.metric("ขนาดกองทุน" if is_fund else "มูลค่าตลาด", fmt_money(mc) if mc else "—")
-    pe = cinfo.get("trailingPE")
-    k2.metric("P/E (12 เดือนล่าสุด)", f"{pe:.1f} เท่า" if pe else "—")
-    beta = cinfo.get("beta") or cinfo.get("beta3Year")
-    k3.metric("Beta", f"{beta:.2f}" if beta else "—", help="ความผันผวนเทียบตลาด: 1 = เท่าตลาด, >1 = ผันผวนกว่า")
-    if cinfo.get("website"):
-        st.markdown(f"🌐 [{cinfo['website']}]({cinfo['website']})")
-
-    # ---- Profile ----
-    st.markdown("#### 📄 ข้อมูลบริษัท")
-    summary = (cinfo.get("longBusinessSummary") or "").strip()
-    if not summary:
-        st.info("Yahoo Finance ไม่มีคำอธิบายของหุ้นตัวนี้")
-    else:
-        if st.toggle("แปลเป็นภาษาไทย", value=True, key="company_th"):
-            try:
-                with st.spinner("กำลังแปล…"):
-                    st.markdown(md_safe(translate_cached(summary)))
-                with st.expander("ต้นฉบับภาษาอังกฤษ"):
-                    st.markdown(md_safe(summary))
-                st.caption("แปลอัตโนมัติด้วย Google Translate — ชื่อเฉพาะและศัพท์การเงินอาจแปลไม่ตรง")
-            except Exception as e:  # noqa: BLE001
-                st.warning(f"แปลไม่สำเร็จ ({type(e).__name__}) — แสดงต้นฉบับแทน")
-                st.markdown(md_safe(summary))
-        else:
-            st.markdown(md_safe(summary))
-
-    # ---- News ----
-    st.markdown("#### 📰 ข่าวล่าสุด")
-    with st.spinner("กำลังโหลดข่าว…"):
-        news = get_news(c_ticker, cinfo.get("shortName") or c_ticker)
-    if not news:
-        st.info("ไม่พบข่าวของหุ้นตัวนี้")
-    else:
-        th_titles = None
-        if st.toggle("แปลหัวข้อข่าวเป็นไทย", value=True, key="news_th"):
-            try:
-                with st.spinner("กำลังแปลหัวข้อข่าว…"):
-                    th_titles = translate_lines_cached(tuple(n["title"] for n in news))
-            except Exception as e:  # noqa: BLE001
-                st.caption(f"แปลหัวข้อข่าวไม่สำเร็จ ({type(e).__name__}) — แสดงต้นฉบับ")
-        for i, n in enumerate(news):
-            when = pd.Timestamp(n["time"]).tz_convert(BKK).strftime("%d/%m/%Y %H:%M น.") if n["time"] else ""
-            title = th_titles[i] if th_titles and th_titles[i] else n["title"]
-            st.markdown(f"**[{md_safe(title)}]({n['url']})**  \n"
-                        + (f"{md_safe(n['title'])}  \n" if th_titles else "")
-                        + f"<small>{md_safe(n['source'])} · {when}</small>", unsafe_allow_html=True)
-        st.caption("กดหัวข้อเพื่ออ่านข่าวต้นฉบับ · แหล่งข่าว: Yahoo Finance (สำรอง: Google News) · เวลาเป็นเวลาไทย")
-
-    # ---- Earnings ----
-    st.markdown("#### 🎙️ Earnings call และผลประกาศงบ")
-    if is_fund:
-        st.info("ETF/กองทุนไม่มีการประกาศงบหรือ earnings call — ดูข้อมูลบริษัทที่กองทุนถือแทน")
-    else:
-        with st.spinner("กำลังโหลดข้อมูลงบ…"):
-            ern = get_earnings(c_ticker)
-        e1, e2 = st.columns(2)
-        nxt = ern.get("next")
-        if nxt:
-            days = (pd.Timestamp(nxt) - pd.Timestamp.now().normalize()).days
-            e1.metric("ประกาศงบครั้งถัดไป (เวลาสหรัฐ)", f"{pd.Timestamp(nxt):%d/%m/%Y}",
-                      f"อีก {days} วัน" if days >= 0 else "ผ่านมาแล้ว", delta_color="off")
-        else:
-            e1.metric("ประกาศงบครั้งถัดไป", "—")
-        est_eps = ern.get("eps_est")
-        e2.metric("EPS ที่นักวิเคราะห์คาด", f"${est_eps:.2f}" if est_eps is not None and pd.notna(est_eps) else "—")
-        hist = ern.get("history")
-        if hist is not None and not hist.empty:
-            h = pd.DataFrame({
-                "วันประกาศ": [f"{d:%d/%m/%Y}" for d in hist.index],
-                "EPS คาด": hist["EPS Estimate"].values,
-                "EPS จริง": hist["Reported EPS"].values,
-                "Surprise %": hist["Surprise(%)"].values if "Surprise(%)" in hist.columns else None,
-            })
-            h["ผล"] = ["✅ ดีกว่าคาด" if s > 0 else "❌ แย่กว่าคาด" if s < 0 else "➖ ตามคาด" if pd.notna(s) else ""
-                      for s in pd.to_numeric(h["Surprise %"], errors="coerce")]
-            st.dataframe(h, hide_index=True, width="stretch", column_config={
-                "EPS คาด": st.column_config.NumberColumn(format="$%.2f"),
-                "EPS จริง": st.column_config.NumberColumn(format="$%.2f"),
-                "Surprise %": st.column_config.NumberColumn(format="%+.1f%%")})
-        st.markdown("**ฟัง / อ่าน earnings call**")
-        for label, url, desc in earnings_links(c_ticker, cinfo):
-            st.markdown(f"- **[{label}]({url})** — {desc}")
-        with st.expander("📘 วิธีอ่านผลงบและฟัง earnings call"):
-            st.markdown(guides.EARNINGS)
 
 
 # ================= แจ้งเตือนราคา =================
