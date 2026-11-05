@@ -1,4 +1,4 @@
-name: Buffett screener (S&P 500)
+name: Buffett screener (S&P 500 + Nasdaq-100)
 
 on:
   schedule:

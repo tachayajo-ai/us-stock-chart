@@ -573,12 +573,36 @@ def load_buffett_indicator(mtime: float) -> tuple[pd.DataFrame, str]:
 
 
 
-SCREENER_FILE = Path(__file__).with_name("screener.csv")
+SCREENER_FILE = Path(__file__).with_name("screener.csv")              # เสาร์: S&P 500 + Nasdaq-100
+SCREENER_R1000_FILE = Path(__file__).with_name("screener_r1000.csv")  # อาทิตย์: Russell 1000 ส่วนที่เหลือ
+R1000_MEMBERS_FILE = Path(__file__).with_name("russell1000.json")
+INDEXES = ["S&P 500", "Nasdaq-100", "Russell 1000"]
+
+
+def screener_mtime() -> float:
+    return sum(f.stat().st_mtime for f in (SCREENER_FILE, SCREENER_R1000_FILE, R1000_MEMBERS_FILE) if f.exists())
 
 
 @st.cache_data(ttl=600, show_spinner=False)
 def load_screener(mtime: float) -> pd.DataFrame:  # mtime: โหลดใหม่เมื่อไฟล์เปลี่ยน
-    return pd.read_csv(SCREENER_FILE)
+    """รวมผลรอบเสาร์ + อาทิตย์ · คอลัมน์ indexes เช่น S&P 500 · Nasdaq-100 · Russell 1000"""
+    sc = pd.read_csv(SCREENER_FILE)
+    if "indexes" not in sc.columns:  # ไฟล์รุ่นเก่า (S&P 500 อย่างเดียว)
+        sc["indexes"] = "S&P 500"
+    sc["indexes"] = sc["indexes"].fillna("").astype(str)
+    if R1000_MEMBERS_FILE.exists():
+        try:
+            members = set(json.loads(R1000_MEMBERS_FILE.read_text())["tickers"])
+            m = sc["ticker"].isin(members)
+            sc.loc[m, "indexes"] = sc.loc[m, "indexes"] + " · Russell 1000"
+        except Exception:
+            pass
+    if SCREENER_R1000_FILE.exists():
+        extra = pd.read_csv(SCREENER_R1000_FILE)
+        extra = extra[~extra["ticker"].isin(sc["ticker"])]
+        sc = pd.concat([sc, extra.assign(indexes="Russell 1000")], ignore_index=True)
+    sc["indexes"] = sc["indexes"].str.strip(" ·")
+    return sc
 
 
 def buffett_zone(v: float) -> str:
@@ -629,7 +653,9 @@ def sp500_indicator(bi_df: pd.DataFrame) -> dict | None:
     - ค่าย้อนหลัง/วันนี้ = ค่าจริงนั้น × (ดัชนี ^GSPC ณ เวลานั้น ÷ ดัชนี ณ วันที่อัปเดต)"""
     if not SCREENER_FILE.exists():
         return None
-    sc = load_screener(SCREENER_FILE.stat().st_mtime)
+    sc = load_screener(screener_mtime())
+    sc = sc[sc["indexes"].str.contains("S&P 500", regex=False)]
+    sc = sc[sc["updated"] == sc["updated"].max()] if "updated" in sc.columns else sc
     if "market_cap" not in sc.columns or sc["market_cap"].notna().sum() < 400:
         return None
     base = sc["name"].astype(str).str.replace(r"\s*\(Class [A-Z]\)", "", regex=True).str.strip()
@@ -929,13 +955,15 @@ with tab_chart:
 
 # ================= Screener (S&P 500) =================
 with tab_screener:
-    st.markdown("### 🔍 Buffett Screener — S&P 500")
+    st.markdown("### 🔍 Buffett Screener — S&P 500 · Nasdaq-100 · Russell 1000")
     if not SCREENER_FILE.exists():
-        st.info("ยังไม่มีผลคัดกรอง — ไปที่ GitHub repo → แท็บ **Actions** → **Buffett screener (S&P 500)** "
+        st.info("ยังไม่มีผลคัดกรอง — ไปที่ GitHub repo → แท็บ **Actions** → **Buffett screener (S&P 500 + Nasdaq-100)** "
                 "→ **Run workflow** รอประมาณ 30-40 นาที แล้วเปิดหน้านี้ใหม่")
     else:
-        sc = load_screener(SCREENER_FILE.stat().st_mtime)
-        st.caption(f"อัปเดตล่าสุด {sc['updated'].iloc[0]} · {len(sc)} บริษัท · คำนวณใหม่อัตโนมัติทุกวันเสาร์ · "
+        sc = load_screener(screener_mtime())
+        upd = sc.groupby(sc["indexes"] == "Russell 1000")["updated"].max()
+        st.caption(f"S&P 500 + Nasdaq-100 อัปเดต {upd.get(False, '—')} (ทุกวันเสาร์) · "
+                   f"Russell 1000 ส่วนที่เหลืออัปเดต {upd.get(True, 'ยังไม่มี')} (ทุกวันอาทิตย์) · {len(sc)} บริษัท · "
                    "DCF ใช้ค่าเริ่มต้น (discount 10%, terminal 2.5%, growth = ต่ำกว่าระหว่าง CAGR กระแสเงินสด/รายได้ จำกัด 0–10%) · "
                    "ธนาคาร/ประกัน/โบรกเกอร์ ไม่คำนวณ DCF/MOS ให้ดู P/B แทน")
         with st.expander("📘 วิธีใช้และแปลผล Screener"):
@@ -944,6 +972,11 @@ with tab_screener:
 
         MOS_OPTS = {"มี Margin of safety (> 0%)": 0, "MOS ≥ 25% (เกณฑ์ Buffett)": 25, "MOS ≥ 50%": 50,
                     "กำหนดเอง": None, "ไม่กรอง MOS": -999}
+        idx_pick = st.radio("ดัชนี", ["ทั้งหมด"] + INDEXES, horizontal=True, key="sc_index",
+                            help="หุ้นหนึ่งตัวอาจอยู่หลายดัชนี เช่น AAPL อยู่ทั้ง 3 ดัชนี · "
+                                 "Russell 1000 แสดงครบเมื่อรอบวันอาทิตย์รันแล้ว")
+        if idx_pick != "ทั้งหมด":
+            sc = sc[sc["indexes"].str.contains(idx_pick, regex=False)].reset_index(drop=True)
         c1, c2, c3 = st.columns([1.2, 1.4, 2])
         min_score = c1.slider("คะแนนขั้นต่ำ (% ข้อที่ผ่าน)", 0, 100, 70, 5, key="sc_min")
         mos_opt = c2.selectbox("Margin of safety", list(MOS_OPTS), index=0, key="sc_mos_opt",
@@ -998,7 +1031,7 @@ with tab_screener:
             if col not in show.columns:
                 show[col] = None
         show["implied_growth"] = pd.to_numeric(show["implied_growth"], errors="coerce") * 100
-        show = show[["ticker", "name", "sector", "score_txt", "score_pct", "price", "intrinsic_value",
+        show = show[["ticker", "name", "sector", "indexes", "score_txt", "score_pct", "price", "intrinsic_value",
                      "margin_of_safety", "implied_growth", "price_to_book", "oe_yield", "roe", "gross_margin", "net_margin", "debt_years", "failed"]]
         st.dataframe(
             show, hide_index=True, width="stretch", height=480,
@@ -1006,6 +1039,7 @@ with tab_screener:
                 "ticker": st.column_config.TextColumn("Symbol"),
                 "name": st.column_config.TextColumn("บริษัท"),
                 "sector": st.column_config.TextColumn("Sector"),
+                "indexes": st.column_config.TextColumn("ดัชนี"),
                 "score_txt": st.column_config.TextColumn("คะแนน"),
                 "score_pct": st.column_config.ProgressColumn("ผ่าน %", min_value=0, max_value=100, format="%.0f%%"),
                 "price": st.column_config.NumberColumn("ราคา", format="$%.2f"),
@@ -1033,7 +1067,7 @@ with tab_screener:
             st.toast("เพิ่มเข้า Watchlist แล้ว: " + ", ".join(add_pick), icon="✅")
             st.rerun()
         st.caption("ใช้คัดกรองเบื้องต้นเท่านั้น ตัวเลขมาจาก Yahoo Finance อาจคลาดเคลื่อน "
-                   "ควรเปิดดูรายละเอียดในแท็บ 📈 กราฟ (ส่วน Buffett ใต้กราฟ) ก่อนตัดสินใจ · ไม่ใช่คำแนะนำการลงทุน")
+                   "ควรเปิดดูรายละเอียดในแท็บ 📈 Data ก่อนตัดสินใจ · ไม่ใช่คำแนะนำการลงทุน")
 
 
 # ================= Buffett Indicator (ตลาดรวม) =================
@@ -1365,7 +1399,7 @@ with tab_port:
                        "(ไม่รวมกำไร/ขาดทุนจากค่าเงิน)")
 
         if held:
-            sc_map = load_screener(SCREENER_FILE.stat().st_mtime).set_index("ticker") if SCREENER_FILE.exists() else None
+            sc_map = load_screener(screener_mtime()).set_index("ticker") if SCREENER_FILE.exists() else None
             rows_h = []
             for k, v in sorted(held.items(), key=lambda kv: -kv[1]["shares"] * (prices.get(kv[0]) or 0)):
                 p = prices.get(k)

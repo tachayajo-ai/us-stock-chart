@@ -13,7 +13,7 @@
 |---|---|---|
 | **แอพ** | ลิงก์ `….streamlit.app` (Streamlit Community Cloud) | หน้าจอที่ใช้งานทุกวัน |
 | **ที่เก็บข้อมูลและโค้ด** | GitHub repo `tachayajo-ai/us-stock-chart` | เก็บโค้ด, watchlist, การตั้งเตือน, พอร์ต (เข้ารหัส), ผล Screener |
-| **งานอัตโนมัติ** | GitHub → แท็บ Actions | คัดหุ้น S&P 500 ทุกวันเสาร์ และตรวจราคาแจ้งเตือนทุก 30 นาที |
+| **งานอัตโนมัติ** | GitHub → แท็บ Actions | คัดหุ้น S&P 500 + Nasdaq-100 ทุกวันเสาร์, Russell 1000 ทุกวันอาทิตย์ และตรวจราคาแจ้งเตือนทุก 30 นาที |
 | **แจ้งเตือนบนมือถือ** | แอพ ntfy | รับแจ้งเตือนเมื่อราคาถึงเป้า |
 | **นักวิเคราะห์ AI** | Claude (claude.ai) + Skill `stock-analyst` | วิเคราะห์ธุรกิจ MOAT ผู้บริหารเชิงลึก |
 
@@ -71,7 +71,8 @@
 ผลตอบแทนรวมปันผลหลายตัวบนกราฟเดียว เริ่มนับวันเดียวกัน
 
 ### 🔍 Screener
-- คัด S&P 500 ทั้ง 500 ตัว คำนวณใหม่อัตโนมัติ **ทุกวันเสาร์ 10:17 น.**
+- คัด **S&P 500 + Nasdaq-100** (~520 ตัว) ทุก **วันเสาร์ 10:17 น.** และ **Russell 1000** ส่วนที่เหลือ (~480 ตัว) ทุก **วันอาทิตย์ 10:17 น.** — ทั้งสองรอบใช้ราคาปิดวันศุกร์
+- ปุ่ม **ดัชนี**: ทั้งหมด / S&P 500 / Nasdaq-100 / Russell 1000 · คอลัมน์ "ดัชนี" บอกว่าหุ้นอยู่ในดัชนีไหนบ้าง
 - กรองตามคะแนน, Margin of safety (ปุ่มสำเร็จรูป), Sector · เรียงตาม MOS / คะแนน / OE yield / P/B
 - คอลัมน์ "โตที่ราคาคาดไว้" ยิ่งต่ำ ราคายิ่งคาดหวังน้อย
 - **🇺🇸 Buffett Indicator** (ล่างสุดของแท็บ) — มูลค่าตลาดหุ้นรวม ÷ GDP: ตลาดรวมแพงหรือถูก เลือกดูทั้งตลาดหรือ S&P 500 (ข้อมูลรายไตรมาส เปลี่ยนช้า)
@@ -113,7 +114,8 @@
 
 | งาน | เวลา | ผลลัพธ์ | ดูสถานะ |
 |---|---|---|---|
-| Buffett screener (S&P 500) | ทุกวันเสาร์ 10:17 น. (~15 นาที) | `screener.csv`, `buffett_indicator.csv` | GitHub → Actions |
+| Buffett screener (S&P 500 + Nasdaq-100) | ทุกวันเสาร์ 10:17 น. | `screener.csv`, `buffett_indicator.csv` | GitHub → Actions |
+| Buffett screener (Russell 1000) | ทุกวันอาทิตย์ 10:17 น. | `screener_r1000.csv`, `russell1000.json` | GitHub → Actions |
 | Price alerts | ทุก ~30 นาที จันทร์–ศุกร์ | แจ้งเตือนเข้า ntfy, `alerts_state.json` | GitHub → Actions |
 
 - **สั่งรันเอง:** GitHub → Actions → เลือกงาน → Run workflow
@@ -164,13 +166,13 @@ Claude จะแก้โค้ดและส่งขึ้น GitHub ให�
 | `company.py` | แปลภาษา ข่าว earnings |
 | `alerts.py` | ตรวจราคาและส่งแจ้งเตือน |
 | `portfolio.py` | คำนวณพอร์ตและเข้ารหัสข้อมูล |
-| `screener.py` | คัดหุ้น S&P 500 |
+| `screener.py` | คัดหุ้น S&P 500 + Nasdaq-100 (เสาร์) และ Russell 1000 (อาทิตย์) |
 | `guides.py` | ข้อความ 📘 วิธีแปลผลในแอพ |
 | `MANUAL.md` | คู่มือนี้ |
 | `.github/workflows/` | ตารางเวลางานอัตโนมัติ |
 | `ai-analyst/` | Skill นักวิเคราะห์สำหรับ Claude |
 | `watchlist.json`, `alerts.json` | ข้อมูลที่แอพบันทึก |
-| `screener.csv`, `buffett_indicator.csv`, `alerts_state.json` | ข้อมูลที่งานอัตโนมัติบันทึก |
+| `screener.csv`, `screener_r1000.csv`, `russell1000.json`, `buffett_indicator.csv`, `alerts_state.json` | ข้อมูลที่งานอัตโนมัติบันทึก |
 | `portfolio.enc.json` | พอร์ต (เข้ารหัส) |
 
 ---

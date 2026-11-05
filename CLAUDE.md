@@ -11,21 +11,21 @@ Notes for Claude sessions working on this repo. The user-facing Thai manual is `
 - **App**: Streamlit, deployed at `tachaya-stock.streamlit.app` (Streamlit Community Cloud, repo `tachayajo-ai/us-stock-chart`, main file `app.py`).
 - **Data source**: `yfinance` (Yahoo). Buffett Indicator from **DBnomics** (Fed Z.1 `FL103164105.Q` ÷ BEA GDP `A191RC-Q`) — FRED blocks cloud IPs.
 - **Persistence**: JSON files in this repo written via GitHub Contents API using Streamlit secrets `GITHUB_TOKEN`, `GITHUB_REPO` (`read_repo_json` / `write_repo_json` in `app.py`; local file fallback when no secrets).
-- **Automation (GitHub Actions)**: `screener.yml` (Sat 03:17 UTC; writes `screener.csv`, `buffett_indicator.csv`), `alerts.yml` (every 30 min weekdays; ntfy push; writes `alerts_state.json`; secret `NTFY_TOPIC`). Claude can trigger them with `gh workflow run <file> -R tachayajo-ai/us-stock-chart --ref main [-f test=true]`.
+- **Automation (GitHub Actions)**: `screener.yml` (Sat 03:17 UTC; S&P 500 + Nasdaq-100 → `screener.csv` with `indexes` column, `buffett_indicator.csv`), `screener_r1000.yml` (Sun 03:17 UTC; `--universe r1000`: Russell 1000 minus tickers already in screener.csv → `screener_r1000.csv`, member list `russell1000.json`; app's `load_screener()` merges all three), `alerts.yml` (every 30 min weekdays; ntfy push; writes `alerts_state.json`; secret `NTFY_TOPIC`). Claude can trigger them with `gh workflow run <file> -R tachayajo-ai/us-stock-chart --ref main [-f test=true]`.
 
 ## Files
 | File | Purpose |
 |---|---|
 | `app.py` | All UI. Tabs: Data (label "📈 Data"; ticker selectbox `chart_ticker` at top; then a second `with tab_chart:` appends company info [profile TH/EN + earnings in expanders] → Buffett checklist/DCF/annual financials → news last), Watchlist (add/select/reorder ⏫↑↓/delete via callbacks in horizontal containers; no sidebar — `pick()` callback sets `selected` + `chart_ticker`), เปรียบเทียบ, Screener (market-wide Buffett Indicator appended at the bottom via a second `with tab_screener:`), แจ้งเตือน, พอร์ต, คู่มือ |
 | `buffett.py` | Fundamentals fetch, Buffett checklist, Owner Earnings (OCF − SBC − maintenance capex, Greenwald), DCF, implied growth, financials detection, P/B, share count, Buffett Indicator |
-| `screener.py` | S&P 500 screen (Wikipedia list) → `screener.csv` |
+| `screener.py` | Screens: main = S&P 500 + Nasdaq-100 (Wikipedia), r1000 = Russell 1000 (Wikipedia → iShares IWB holdings fallback) |
 | `company.py` | Google Translate (free gtx endpoint; optional `GOOGLE_TRANSLATE_API_KEY`), news (Yahoo → Google News RSS), earnings |
 | `alerts.py` | Alert model + checker + ntfy JSON publish |
 | `portfolio.py` | Transactions, average cost, P/L, dividends (15% Thai withholding), value vs SPY, Fernet+PBKDF2 encryption, multi-portfolio `{"portfolios":[...]}` |
 | `guides.py` | 📘 interpretation texts shown in the app |
 | `ui.py` | CSS (dark broker style) + hero/chips HTML; `.streamlit/config.toml` theme |
 | `ai-analyst/` | Claude Skill `stock-analyst` (SKILL.md + 13 references) and its zip |
-| data | `watchlist.json`, `alerts.json`, `alerts_state.json`, `screener.csv`, `buffett_indicator.csv`, `portfolio.enc.json` (encrypted; password only the user knows) |
+| data | `watchlist.json`, `alerts.json`, `alerts_state.json`, `screener.csv`, `screener_r1000.csv`, `russell1000.json`, `buffett_indicator.csv`, `portfolio.enc.json` (encrypted; password only the user knows) |
 
 ## Gotchas (learned the hard way)
 - Streamlit Cloud does not reload imported modules after a push → `app.py` reloads `buffett, guides, company, alerts, portfolio, ui` via `importlib.reload`. Add new modules to that list.

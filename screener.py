@@ -1,10 +1,14 @@
-"""คัดกรองหุ้น S&P 500 ด้วย Buffett checklist แล้วบันทึกเป็น screener.csv
-รันอัตโนมัติทุกสัปดาห์ผ่าน GitHub Actions (.github/workflows/screener.yml)
-รันเอง:  python screener.py            (ทั้ง S&P 500 ใช้เวลาประมาณ 20-40 นาที)
+"""คัดกรองหุ้นด้วย Buffett checklist
+- วันเสาร์  (.github/workflows/screener.yml):       S&P 500 + Nasdaq-100 → screener.csv (+ buffett_indicator.csv)
+- วันอาทิตย์ (.github/workflows/screener_r1000.yml): Russell 1000 เฉพาะตัวที่ไม่อยู่ใน screener.csv
+                                                    → screener_r1000.csv + russell1000.json (รายชื่อสมาชิกทั้งหมด)
+รันเอง:  python screener.py                      (S&P 500 + Nasdaq-100)
+         python screener.py --universe r1000     (Russell 1000 ส่วนที่เหลือ)
          python screener.py --tickers AAPL,MSFT,KO   (ทดสอบไม่กี่ตัว)
 """
 import argparse
 import io
+import json
 import sys
 import time
 from datetime import datetime, timezone
@@ -19,6 +23,8 @@ from buffett import (build_buffett_indicator, buffett_checks, current_price, dcf
                      valuation_rows)
 
 OUT = Path(__file__).with_name("screener.csv")
+OUT_R1000 = Path(__file__).with_name("screener_r1000.csv")
+R1000_MEMBERS = Path(__file__).with_name("russell1000.json")
 BI_OUT = Path(__file__).with_name("buffett_indicator.csv")
 UA = {"User-Agent": "Mozilla/5.0 (us-stock-chart screener)"}
 DISCOUNT, TERMINAL = 0.10, 0.025
@@ -39,6 +45,70 @@ def sp500() -> pd.DataFrame:
             columns={"Symbol": "ticker", "Security": "name", "GICS Sector": "sector"})
     df["ticker"] = df["ticker"].str.replace(".", "-", regex=False).str.strip()
     return df[["ticker", "name", "sector"]].drop_duplicates("ticker")
+
+
+def _clean(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.dropna(subset=["ticker"]).copy()
+    df["ticker"] = df["ticker"].astype(str).str.strip().str.upper().str.replace(".", "-", regex=False)
+    df = df[df["ticker"].str.fullmatch(r"[A-Z][A-Z0-9-]{0,6}")]
+    for c in ("name", "sector"):
+        if c not in df.columns:
+            df[c] = ""
+    return df[["ticker", "name", "sector"]].drop_duplicates("ticker")
+
+
+def wiki_table(url: str, min_rows: int) -> pd.DataFrame:
+    """หาตารางรายชื่อหุ้นในหน้า Wikipedia: ตารางแรกที่มีคอลัมน์ Ticker/Symbol และจำนวนแถว ≥ min_rows"""
+    html = requests.get(url, headers=UA, timeout=30).text
+    for t in pd.read_html(io.StringIO(html)):
+        t.columns = [" ".join(map(str, c)) if isinstance(c, tuple) else str(c) for c in t.columns]
+        sym = next((c for c in t.columns if c.strip().lower() in ("ticker", "symbol", "ticker symbol")), None)
+        if sym is None or len(t) < min_rows:
+            continue
+        name = next((c for c in t.columns if c.strip().lower() in ("company", "security", "name")), None)
+        sec = next((c for c in t.columns if "sector" in c.lower()), None)
+        out = pd.DataFrame({"ticker": t[sym], "name": t[name] if name else "", "sector": t[sec] if sec else ""})
+        return _clean(out)
+    raise ValueError(f"no constituents table on {url}")
+
+
+def nasdaq100() -> pd.DataFrame:
+    return wiki_table("https://en.wikipedia.org/wiki/Nasdaq-100", 90)
+
+
+def russell1000() -> pd.DataFrame:
+    """รายชื่อ Russell 1000: Wikipedia ถ้าไม่ได้ใช้ holdings ของ iShares IWB"""
+    try:
+        return wiki_table("https://en.wikipedia.org/wiki/Russell_1000_Index", 900)
+    except Exception as e:  # noqa: BLE001
+        print(f"Wikipedia Russell 1000 failed ({e}); using iShares IWB holdings", file=sys.stderr)
+    text = requests.get("https://www.ishares.com/us/products/239707/ishares-russell-1000-etf/"
+                        "1467271812596.ajax?fileType=csv&fileName=IWB_holdings&dataType=fund",
+                        headers=UA, timeout=60).text
+    start = next(i for i, line in enumerate(text.splitlines()) if line.startswith("Ticker,"))
+    df = pd.read_csv(io.StringIO("\n".join(text.splitlines()[start:])), on_bad_lines="skip")
+    if "Asset Class" in df.columns:
+        df = df[df["Asset Class"] == "Equity"]
+    df = _clean(df.rename(columns={"Ticker": "ticker", "Name": "name", "Sector": "sector"}))
+    df["name"] = df["name"].astype(str).str.title()
+    if len(df) < 900:
+        raise ValueError(f"iShares holdings too short ({len(df)})")
+    return df
+
+
+def main_universe() -> pd.DataFrame:
+    """S&P 500 + Nasdaq-100 พร้อมคอลัมน์ indexes (เช่น "S&P 500 · Nasdaq-100")"""
+    sp = sp500().assign(indexes="S&P 500")
+    try:
+        ndx = nasdaq100()
+        print(f"Nasdaq-100: {len(ndx)} tickers")
+    except Exception as e:  # noqa: BLE001
+        print(f"Nasdaq-100 list failed ({e}); S&P 500 only", file=sys.stderr)
+        return sp
+    both = sp["ticker"].isin(ndx["ticker"])
+    sp.loc[both, "indexes"] = "S&P 500 · Nasdaq-100"
+    extra = ndx[~ndx["ticker"].isin(sp["ticker"])].assign(indexes="Nasdaq-100")
+    return pd.concat([sp, extra], ignore_index=True)
 
 
 def fetch_with_retry(ticker: str, tries: int = 3) -> dict | None:
@@ -85,18 +155,34 @@ def screen_one(ticker: str, name: str, sector: str, tnx) -> dict | None:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tickers", help="คั่นด้วย comma (ไม่ใส่ = ทั้ง S&P 500)")
+    ap.add_argument("--universe", choices=["main", "r1000"], default="main",
+                    help="main = S&P 500 + Nasdaq-100 · r1000 = Russell 1000 ที่ไม่อยู่ใน screener.csv")
+    ap.add_argument("--tickers", help="คั่นด้วย comma (ทดสอบ — ไม่ใส่ = ตาม --universe)")
     ap.add_argument("--delay", type=float, default=1.0, help="วินาทีที่พักระหว่างหุ้นแต่ละตัว")
-    ap.add_argument("--min-results", type=int, default=300,
+    ap.add_argument("--min-results", type=int, default=None,
                     help="ถ้าได้ผลน้อยกว่านี้จะไม่เขียนทับไฟล์เดิม (กันข้อมูลเสียจาก rate limit)")
     args = ap.parse_args()
+    r1000 = args.universe == "r1000"
+    out = OUT_R1000 if r1000 else OUT
 
     if args.tickers:
         universe = pd.DataFrame({"ticker": [t.strip().upper() for t in args.tickers.split(",")],
-                                 "name": "", "sector": ""})
-        args.min_results = min(args.min_results, 1)
+                                 "name": "", "sector": "", "indexes": ""})
+        min_results = 1
+    elif r1000:
+        members = russell1000()
+        print(f"Russell 1000: {len(members)} tickers")
+        R1000_MEMBERS.write_text(json.dumps({"updated": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                                             "tickers": sorted(members["ticker"])}, indent=0))
+        done = set(pd.read_csv(OUT)["ticker"]) if OUT.exists() else set()
+        universe = members[~members["ticker"].isin(done)].assign(indexes="Russell 1000")
+        print(f"Skip {len(members) - len(universe)} already in {OUT.name}")
+        min_results = 100
     else:
-        universe = sp500()
+        universe = main_universe()
+        min_results = 300
+    if args.min_results is not None:
+        min_results = args.min_results
     print(f"Screening {len(universe)} tickers…")
 
     try:
@@ -115,6 +201,7 @@ def main():
         if r:
             if not r["name"]:
                 r["name"] = row.ticker
+            r["indexes"] = row.indexes
             results.append(r)
         else:
             skipped.append(row.ticker)
@@ -123,21 +210,23 @@ def main():
         time.sleep(args.delay)
 
     print(f"OK {len(results)} · skipped {len(skipped)}: {', '.join(skipped[:30])}")
-    # Buffett Indicator ของตลาดรวม (ล้มเหลวได้โดยไม่กระทบผลคัดกรองหุ้น)
-    try:
-        bi = build_buffett_indicator()
-        bi.to_csv(BI_OUT, float_format="%.4f")
-        print(f"Wrote {BI_OUT.name} ({len(bi)} quarters, latest {bi.index[-1]:%Y-%m-%d}: {bi['ratio'].iloc[-1]:.0f}%)")
-    except Exception as e:  # noqa: BLE001
-        print(f"Buffett Indicator failed: {e}", file=sys.stderr)
+    if not r1000:
+        # Buffett Indicator ของตลาดรวม (ล้มเหลวได้โดยไม่กระทบผลคัดกรองหุ้น)
+        try:
+            bi = build_buffett_indicator()
+            bi.to_csv(BI_OUT, float_format="%.4f")
+            print(f"Wrote {BI_OUT.name} ({len(bi)} quarters, latest {bi.index[-1]:%Y-%m-%d}: "
+                  f"{bi['ratio'].iloc[-1]:.0f}%)")
+        except Exception as e:  # noqa: BLE001
+            print(f"Buffett Indicator failed: {e}", file=sys.stderr)
 
-    if len(results) < args.min_results:
-        sys.exit(f"Only {len(results)} results (< {args.min_results}); keeping previous {OUT.name}")
+    if len(results) < min_results:
+        sys.exit(f"Only {len(results)} results (< {min_results}); keeping previous {out.name}")
 
     df = pd.DataFrame(results).sort_values(["score_pct", "margin_of_safety"], ascending=False)
     df["updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    df.to_csv(OUT, index=False, float_format="%.4f")
-    print(f"Wrote {OUT} ({len(df)} rows)")
+    df.to_csv(out, index=False, float_format="%.4f")
+    print(f"Wrote {out} ({len(df)} rows)")
 
 
 if __name__ == "__main__":
