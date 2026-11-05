@@ -98,17 +98,19 @@ label[data-testid="stRadioOption"][data-selected="true"] p { color: #fff !import
 .chip .d { font-size:.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .chip.up .v { color: var(--up); } .chip.down .v { color: var(--down); }
 .chip.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: #1A1D33; }
-.ck { display:flex; flex-direction:column; gap:8px; margin: 4px 0 12px; }
-.ck-row { background: var(--card); border:1px solid var(--border); border-radius:12px; padding:10px 14px; }
-.ck-row.pass { border-left: 4px solid #22c55e; }
-.ck-row.fail { border-left: 4px solid #ef4444; }
-.ck-row.na   { border-left: 4px solid #64748b; }
-.ck-top { display:flex; justify-content:space-between; gap:10px; align-items:baseline; flex-wrap:wrap; }
-.ck-name { font-weight:600; }
-.ck-res { white-space:nowrap; font-size:.9rem; }
-.ck-val { margin-top:2px; font-variant-numeric: tabular-nums; }
-.ck-rule, .ck-why { color: var(--muted); font-size:.82rem; margin-top:2px; }
-.ck-mean { font-size:.88rem; margin-top:4px; }
+.ck { display:flex; flex-direction:column; gap:5px; margin: 2px 0 10px; }
+.ck-row { background: var(--card); border:1px solid var(--border); border-radius:10px; padding:6px 10px;
+  font-size:.84rem; line-height:1.35; overflow-wrap:anywhere; }
+.ck-row.pass { border-left: 3px solid #22c55e; }
+.ck-row.fail { border-left: 3px solid #ef4444; }
+.ck-row.na   { border-left: 3px solid #64748b; }
+.ck-top { display:flex; justify-content:space-between; gap:8px; align-items:baseline; }
+.ck-name { font-weight:600; font-size:.86rem; }
+.ck-res { white-space:nowrap; font-size:.78rem; }
+.ck-val { font-variant-numeric: tabular-nums; }
+.ck-rule { color: var(--muted); font-size:.74rem; }
+.ck-why { color: var(--muted); font-size:.74rem; margin-top:1px; }
+.ck-mean { font-size:.78rem; margin-top:2px; }
 .ck-mean.pass { color:#86efac; }
 .ck-mean.fail { color:#fca5a5; }
 </style>
@@ -176,8 +178,7 @@ def checklist(rows: list[dict]) -> str:
         out.append(
             f'<div class="ck-row {r.get("_s", "na")}"><div class="ck-top">'
             f'<span class="ck-name">{_h(r["หลักเกณฑ์"])}</span><span class="ck-res">{_h(r["ผล"])}</span></div>'
-            f'<div class="ck-val">{_h(r["ค่าจริง"])}</div>'
-            f'<div class="ck-rule">เกณฑ์: {_h(r["เกณฑ์ผ่าน"])}</div>'
+            f'<div class="ck-val">{_h(r["ค่าจริง"])} <span class="ck-rule">· เกณฑ์ {_h(r["เกณฑ์ผ่าน"])}</span></div>'
             + (f'<div class="ck-mean {r.get("_s", "")}">{_h(r["ความหมาย"])}</div>' if r.get("ความหมาย") else "")
             + (f'<div class="ck-why">{"ข้อนี้สำคัญเพราะ: " if r.get("_s") == "fail" else ""}{_h(r["ทำไมสำคัญ"])}</div>'
                if r.get("ทำไมสำคัญ") and r.get("_s") != "pass" else "")
