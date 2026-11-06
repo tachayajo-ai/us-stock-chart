@@ -18,5 +18,15 @@
     "mos": null,
     "note": "น่าเข้าลงทุน",
     "created": "2026-11-04"
+  },
+  {
+    "id": "0d6d4bad77",
+    "ticker": "SMH",
+    "kind": "below",
+    "target": 420.0,
+    "iv": null,
+    "mos": null,
+    "note": "ราคาที่คาดคือ 400+/- 20",
+    "created": "2026-11-06"
   }
 ]
