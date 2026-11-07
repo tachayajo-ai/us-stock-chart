@@ -38,5 +38,15 @@
     "mos": null,
     "note": "",
     "created": "2026-11-07"
+  },
+  {
+    "id": "b3edb13298",
+    "ticker": "ASML",
+    "kind": "below",
+    "target": 1286.99,
+    "iv": null,
+    "mos": null,
+    "note": "",
+    "created": "2026-11-07"
   }
 ]
