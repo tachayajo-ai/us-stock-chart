@@ -28,5 +28,15 @@
     "mos": null,
     "note": "ราคาที่คาดคือ 400+/- 20",
     "created": "2026-11-06"
+  },
+  {
+    "id": "6d043a73a9",
+    "ticker": "NVDA",
+    "kind": "below",
+    "target": 150.0,
+    "iv": null,
+    "mos": null,
+    "note": "",
+    "created": "2026-11-07"
   }
 ]
