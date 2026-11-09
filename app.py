@@ -71,11 +71,23 @@ def _gh_request(method: str, body: dict | None = None, path: str = "watchlist.js
     )
 
 
+def _gh_blocked(r) -> bool:
+    """401/403 = token ใช้ไม่ได้หรือบัญชีถูกระงับ → หยุดเรียก GitHub ทั้ง session (ไม่ยิงซ้ำ)"""
+    if r.status_code in (401, 403):
+        st.session_state.gh_blocked = r.status_code
+        return True
+    return False
+
+
 def read_repo_json(path: str):
     """อ่านไฟล์ JSON จาก GitHub repo (บนคลาวด์) หรือจากโฟลเดอร์แอพ (บนคอม) · None ถ้าไม่มี"""
     if _github_cfg():
+        if st.session_state.get("gh_blocked"):
+            return None
         try:
             r = _gh_request("GET", path=path)
+            if _gh_blocked(r):
+                return None
             if r.status_code == 200:
                 st.session_state.setdefault("gh_sha", {})[path] = r.json()["sha"]
                 return json.loads(base64.b64decode(r.json()["content"]))
@@ -93,11 +105,17 @@ def write_repo_json(path: str, data, message: str) -> bool:
     if not _github_cfg():
         Path(__file__).with_name(path).write_text(text)
         return True
+    if st.session_state.get("gh_blocked"):
+        st.toast(f"บันทึก {path} ไม่ได้: GitHub ปฏิเสธการเข้าถึง ({st.session_state.gh_blocked})", icon="⚠️")
+        return False
     shas = st.session_state.setdefault("gh_sha", {})
     body = {"message": message, "content": base64.b64encode(text.encode()).decode()}
     if shas.get(path):
         body["sha"] = shas[path]
     r = _gh_request("PUT", body, path)
+    if _gh_blocked(r):
+        st.toast(f"บันทึก {path} ไม่ได้: GitHub ปฏิเสธการเข้าถึง ({r.status_code})", icon="⚠️")
+        return False
     if r.status_code in (409, 422):  # sha เก่า: ดึงใหม่แล้วลองอีกครั้ง
         g = _gh_request("GET", path=path)
         if g.status_code == 200:
@@ -319,13 +337,14 @@ with tab_watch:
             st.button(f"➕ **{sym}**  {md_safe(desc)}", key=f"sug_{b}_{sym}", on_click=add_symbol, args=(sym,),
                       width="stretch")
 
-    st.caption("กดชื่อหุ้นเพื่อเลือก แล้วไปที่แท็บ 📈 Data · ⏫ ย้ายไปบนสุด · ↑↓ เลื่อนขึ้น/ลง · ✕ ลบ")
+    st.caption("กดชื่อหุ้นเพื่อเลือก แล้วไปที่แท็บ 📈 Data · ⏫ ย้ายไปบนสุด · ↑↓ เลื่อนขึ้น/ลง (กด 💾 บันทึกเมื่อจัดเสร็จ) · ✕ ลบ")
     def move(t: str, to: int) -> None:
-        """callback: ย้าย t ไปตำแหน่ง to (0 = บนสุด) แล้วบันทึก"""
+        """callback: ย้าย t ไปตำแหน่ง to (0 = บนสุด) · ยังไม่บันทึกลง GitHub จนกว่าจะกด 💾
+        (เดิมบันทึกทุกครั้งที่แตะ = commit ถี่มาก เสี่ยงถูก GitHub มองว่าเป็นการใช้งานอัตโนมัติผิดปกติ)"""
         lst = st.session_state.watchlist
         lst.remove(t)
         lst.insert(max(0, min(to, len(lst))), t)
-        save_watchlist(lst)
+        st.session_state.wl_dirty = True
 
     def remove(t: str) -> None:
         st.session_state.watchlist.remove(t)
@@ -356,6 +375,12 @@ with tab_watch:
                           help=f"ลบ {t}" if n > 1 else "ต้องมีอย่างน้อย 1 ตัว", disabled=n <= 1,
                           on_click=remove, args=(t,))
 
+    if st.session_state.get("wl_dirty"):
+        st.info("ลำดับเปลี่ยนแล้ว แต่ยังไม่ได้บันทึก — จัดให้เสร็จแล้วกด 💾 ครั้งเดียว")
+        if st.button("💾 บันทึกลำดับ Watchlist", type="primary", width="stretch", key="wl_save"):
+            save_watchlist(st.session_state.watchlist)
+            st.session_state.wl_dirty = False
+            st.rerun()
     if st.button("🔄 Refresh ข้อมูล", width="stretch"):
         st.cache_data.clear()
         st.rerun()
@@ -1138,7 +1163,7 @@ with tab_screener:
 # ================= แจ้งเตือนราคา =================
 with tab_alerts:
     st.markdown("### 🔔 แจ้งเตือนราคา")
-    st.caption("GitHub ตรวจราคาให้ทุก 30 นาที (จันทร์–ศุกร์ ช่วง Pre-market ถึง After-hours) แล้วส่งแจ้งเตือนเข้ามือถือ"
+    st.caption("GitHub ตรวจราคาให้ชั่วโมงละครั้ง (จันทร์–ศุกร์ ช่วงตลาดสหรัฐเปิดถึงหลังปิด) แล้วส่งแจ้งเตือนเข้ามือถือ"
                "ผ่านแอพ ntfy · แต่ละรายการแจ้งครั้งเดียว กด \"ตั้งใหม่\" เพื่อให้เตือนอีกครั้ง")
     al = st.session_state.alerts
     with st.expander("➕ ตั้งเตือนใหม่", expanded=not al):

@@ -1,6 +1,6 @@
 """แจ้งเตือนราคา: เก็บการตั้งเตือนใน alerts.json (แอพเขียน) และสถานะใน alerts_state.json (GitHub Actions เขียน)
 
-ตรวจ:  python alerts.py            (GitHub Actions เรียกทุก 30 นาทีช่วงตลาดเปิด)
+ตรวจ:  python alerts.py            (GitHub Actions เรียกชั่วโมงละครั้งช่วงตลาดเปิด)
 ทดสอบ: python alerts.py --test     (ส่งแจ้งเตือนทดสอบ 1 ข้อความ)
 ต้องตั้ง environment variable NTFY_TOPIC (GitHub → Settings → Secrets → Actions)
 """
