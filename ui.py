@@ -115,6 +115,16 @@ label[data-testid="stRadioOption"][data-selected="true"] p { color: #fff !import
 .ck-mean { font-size:.78rem; margin-top:2px; }
 .ck-mean.pass { color:#86efac; }
 .ck-mean.fail { color:#fca5a5; }
+
+/* ---- ตัวเลขการเงินสำคัญ (กริด 2 คอลัมน์บนมือถือ) ---- */
+.ks-sec { color: var(--muted); font-size:.78rem; font-weight:600; letter-spacing:.03em; margin: 10px 0 4px; }
+.ks { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:6px; }
+.ks-c { background: var(--card); border:1px solid var(--border); border-radius:12px; padding:7px 10px; min-width:0; }
+.ks-l { color: var(--muted); font-size:.72rem; line-height:1.25; }
+.ks-v { font-weight:700; font-size:1rem; font-variant-numeric: tabular-nums; overflow-wrap:anywhere; }
+.ks-v.up { color: var(--up); } .ks-v.down { color: var(--down); }
+.ks-n { color: var(--muted); font-size:.68rem; }
+@media (max-width: 640px) { .ks { grid-template-columns: 1fr 1fr; } }
 </style>
 """
 
@@ -186,4 +196,20 @@ def checklist(rows: list[dict]) -> str:
                if r.get("ทำไมสำคัญ") and r.get("_s") != "pass" else "")
             + "</div>")
     out.append("</div>")
+    return "".join(out)
+
+
+def key_stats(sections: list[tuple[str, list[tuple]]], titles: bool = True) -> str:
+    """ตัวเลขการเงินเป็นกริดการ์ดเล็ก · sections = [(หัวข้อ, [(ชื่อ, ค่า, สี "up"/"down"/"", หมายเหตุ), ...])]"""
+    out = []
+    for title, items in sections:
+        items = [i for i in items if i[1] not in (None, "—")]
+        if not items:
+            continue
+        out.append((f'<div class="ks-sec">{_h(title)}</div>' if titles else "") + '<div class="ks">')
+        for label, val, tone, note in items:
+            out.append(f'<div class="ks-c"><div class="ks-l">{_h(label)}</div>'
+                       f'<div class="ks-v {tone}">{_h(val)}</div>'
+                       + (f'<div class="ks-n">{_h(note)}</div>' if note else "") + "</div>")
+        out.append("</div>")
     return "".join(out)

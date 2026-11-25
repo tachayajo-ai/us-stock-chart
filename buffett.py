@@ -510,3 +510,168 @@ def build_buffett_indicator(timeout: int = 60, tries: int = 3) -> pd.DataFrame:
     df["ratio"] = df["mcap_bn"] / df["gdp_bn"] * 100
     df.index.name = "date"
     return df
+
+
+def key_stats(f: dict) -> list[tuple[str, list[tuple]]]:
+    """ตัวเลขการเงินสำคัญสำหรับแท็บ Data · คืน [(หัวข้อ, [(ชื่อ, ค่า, สี, หมายเหตุ), ...])]
+    ค่าที่ไม่มีข้อมูลเป็น None (ui.key_stats จะซ่อนให้)"""
+    info = f["info"]
+    price = current_price(info)
+    mc = info.get("marketCap")
+
+    def num(v):
+        try:
+            v = float(v)
+            return v if v == v and abs(v) != float("inf") else None
+        except (TypeError, ValueError):
+            return None
+
+    def x(v, unit=" เท่า", d=1):
+        v = num(v)
+        return f"{v:,.{d}f}{unit}" if v is not None else None
+
+    def pct(v, sign=False):
+        v = num(v)
+        return (f"{v:+.1%}" if sign else f"{v:.1%}") if v is not None else None
+
+    def tone(v, good_if_pos=True):
+        v = num(v)
+        if v is None or v == 0:
+            return ""
+        return "up" if (v > 0) == good_if_pos else "down"
+
+    def money(v):
+        v = num(v)
+        return fmt_money(v) if v is not None else None
+
+    def last(df, *names):
+        s = _col(df, *names)
+        if s is None:
+            return None, None
+        s = s.dropna()
+        return (num(s.iloc[-1]), s.index[-1]) if len(s) else (None, None)
+
+    qtype = str(info.get("quoteType", "")).upper()
+    if qtype in ("ETF", "MUTUALFUND"):
+        er = num(info.get("netExpenseRatio"))  # Yahoo ให้เป็น % แล้ว (0.09 = 0.09%)
+        er = er / 100 if er is not None else num(info.get("annualReportExpenseRatio"))
+        return [
+            ("กองทุน", [
+                ("ค่าธรรมเนียมต่อปี (Expense ratio)", f"{er:.2%}" if er is not None else None, "", None),
+                ("อัตราปันผล (Yield)", pct(info.get("yield") or info.get("trailingAnnualDividendYield")), "", None),
+                ("ผลตอบแทนเฉลี่ย 3 ปี", pct(info.get("threeYearAverageReturn"), True),
+                 tone(info.get("threeYearAverageReturn")), "ต่อปี"),
+                ("ผลตอบแทนเฉลี่ย 5 ปี", pct(info.get("fiveYearAverageReturn"), True),
+                 tone(info.get("fiveYearAverageReturn")), "ต่อปี"),
+                ("P/E ของหุ้นในกอง", x(info.get("trailingPE")), "", None),
+            ]),
+            ("ราคา", _price_items(info, price, num, money, pct, tone)),
+        ]
+
+    inc, cf = f.get("inc", pd.DataFrame()), f.get("cf", pd.DataFrame())
+    fcf, fcf_y = last(cf, "Free Cash Flow")
+    rev = _col(inc, "Total Revenue")
+    rev_cagr, rev_note = None, None
+    if rev is not None:
+        rev = rev.dropna()
+        if len(rev) >= 2 and rev.iloc[0] > 0 and rev.iloc[-1] > 0:
+            n = len(rev) - 1
+            rev_cagr = (rev.iloc[-1] / rev.iloc[0]) ** (1 / n) - 1
+            rev_note = f"{rev.index[0]}–{rev.index[-1]}"
+    ebit, _ = last(inc, "EBIT", "Operating Income")
+    intexp, _ = last(inc, "Interest Expense", "Interest Expense Non Operating")
+    cover = ebit / abs(intexp) if ebit is not None and intexp else None
+    debt, cash = num(info.get("totalDebt")), num(info.get("totalCash"))
+    de = num(info.get("debtToEquity"))
+    div_rate = num(info.get("dividendRate"))
+    dy = div_rate / price if div_rate and price else num(info.get("trailingAnnualDividendYield"))
+    ex_div = info.get("exDividendDate")
+    try:
+        ex_div = f"{pd.Timestamp(ex_div, unit='s'):%d/%m/%Y}" if ex_div else None
+    except Exception:
+        ex_div = None
+    pb = price_to_book(f)
+
+    return [
+        ("มูลค่า (ถูกหรือแพง)", [
+            ("P/E ล่วงหน้า (Forward)", x(info.get("forwardPE")), "", "จากกำไรที่นักวิเคราะห์คาดปีหน้า"),
+            ("PEG", x(info.get("trailingPegRatio") or info.get("pegRatio"), "", 2), "", "P/E ÷ การเติบโต · < 1 ถือว่าถูก"),
+            ("P/S (ราคา ÷ ยอดขาย)", x(info.get("priceToSalesTrailing12Months")), "", None),
+            ("P/B (ราคา ÷ มูลค่าทางบัญชี)", x(pb, " เท่า", 2), "", None),
+            ("EV/EBITDA", x(info.get("enterpriseToEbitda")), "", "รวมหนี้ด้วย · ใช้เทียบในอุตสาหกรรมเดียวกัน"),
+            ("P/FCF (ราคา ÷ กระแสเงินสดอิสระ)", x(mc / fcf) if mc and fcf and fcf > 0 else None, "",
+             f"FCF ปี {fcf_y}" if fcf_y else None),
+            ("FCF yield", pct(fcf / mc) if mc and fcf else None, tone(fcf), "ยิ่งสูงยิ่งถูก"),
+        ]),
+        ("ความสามารถทำกำไร", [
+            ("Gross margin", pct(info.get("grossMargins")), "", "กำไรขั้นต้น ÷ ยอดขาย"),
+            ("Operating margin", pct(info.get("operatingMargins")), tone(info.get("operatingMargins")),
+             "กำไรจากธุรกิจหลัก ÷ ยอดขาย"),
+            ("Net margin", pct(info.get("profitMargins")), tone(info.get("profitMargins")), "กำไรสุทธิ ÷ ยอดขาย"),
+            ("ROE", pct(info.get("returnOnEquity")), tone(info.get("returnOnEquity")), "กำไร ÷ ส่วนผู้ถือหุ้น"),
+            ("ROA", pct(info.get("returnOnAssets")), tone(info.get("returnOnAssets")), "กำไร ÷ สินทรัพย์"),
+            ("EPS 12 เดือนล่าสุด", f"${num(info.get('trailingEps')):,.2f}" if num(info.get("trailingEps")) is not None
+             else None, tone(info.get("trailingEps")), None),
+            ("EPS ที่คาดปีหน้า", f"${num(info.get('forwardEps')):,.2f}" if num(info.get("forwardEps")) is not None
+             else None, "", None),
+        ]),
+        ("การเติบโต", [
+            ("รายได้ (ไตรมาสล่าสุด เทียบปีก่อน)", pct(info.get("revenueGrowth"), True), tone(info.get("revenueGrowth")),
+             None),
+            ("กำไร (ไตรมาสล่าสุด เทียบปีก่อน)", pct(info.get("earningsGrowth"), True),
+             tone(info.get("earningsGrowth")), None),
+            ("รายได้โตเฉลี่ยต่อปี (CAGR)", pct(rev_cagr, True), tone(rev_cagr), rev_note),
+            ("รายได้ 12 เดือนล่าสุด", money(info.get("totalRevenue")), "", None),
+        ]),
+        ("ฐานะการเงิน", [
+            ("เงินสด", money(cash), "", None),
+            ("หนี้สินที่มีดอกเบี้ย", money(debt), "", None),
+            ("หนี้สุทธิ (หนี้ − เงินสด)", money(debt - cash) if debt is not None and cash is not None else None,
+             tone(debt - cash, False) if debt is not None and cash is not None else "", "ติดลบ = เงินสดมากกว่าหนี้"),
+            ("D/E (หนี้ ÷ ทุน)", x(de / 100, " เท่า", 2) if de is not None else None, "", None),
+            ("Current ratio", x(info.get("currentRatio"), " เท่า", 2), "",
+             "สินทรัพย์หมุนเวียน ÷ หนี้ระยะสั้น · > 1 ดี"),
+            ("ความสามารถจ่ายดอกเบี้ย", x(cover) if cover is not None else None,
+             "up" if cover and cover >= 5 else "down" if cover is not None and cover < 2 else "",
+             "EBIT ÷ ดอกเบี้ยจ่าย · ≥ 5 เท่าปลอดภัย"),
+            ("Free cash flow", money(fcf), tone(fcf), f"ปี {fcf_y}" if fcf_y else None),
+        ]),
+        ("ปันผล", [
+            ("อัตราปันผล", pct(dy) if dy else None, "", f"${div_rate:,.2f} ต่อหุ้นต่อปี" if div_rate else None),
+            ("Payout ratio", pct(info.get("payoutRatio")) if num(info.get("payoutRatio")) else None, "",
+             "สัดส่วนกำไรที่จ่ายเป็นปันผล"),
+            ("วันขึ้น XD ล่าสุด", ex_div, "", None),
+        ]),
+        ("ราคาและนักวิเคราะห์", _price_items(info, price, num, money, pct, tone) + [
+            ("ราคาเป้าหมายเฉลี่ย", f"${num(info.get('targetMeanPrice')):,.2f}" if num(info.get("targetMeanPrice"))
+             else None, tone(num(info.get("targetMeanPrice")) - price)
+             if num(info.get("targetMeanPrice")) and price else "",
+             (f"{num(info.get('targetMeanPrice')) / price - 1:+.0%} จากราคาปัจจุบัน · "
+              if num(info.get("targetMeanPrice")) and price else "")
+             + f"{info.get('numberOfAnalystOpinions') or '?'} นักวิเคราะห์"),
+            ("คำแนะนำนักวิเคราะห์", _REC.get(str(info.get("recommendationKey", "")).lower()), "",
+             f"คะแนน {num(info.get('recommendationMean')):.1f} (1 = ซื้อมาก, 5 = ขาย)"
+             if num(info.get("recommendationMean")) else None),
+            ("ผู้บริหารถือหุ้น", pct(info.get("heldPercentInsiders")), "", None),
+            ("สถาบันถือหุ้น", pct(info.get("heldPercentInstitutions")), "", None),
+            ("Short interest", pct(info.get("shortPercentOfFloat")), "", "% ของหุ้นหมุนเวียนที่ถูกขายชอร์ต"),
+        ]),
+    ]
+
+
+_REC = {"strong_buy": "ซื้อมาก", "buy": "ซื้อ", "hold": "ถือ", "underperform": "ต่ำกว่าตลาด", "sell": "ขาย",
+        "strong_sell": "ขายมาก"}
+
+
+def _price_items(info, price, num, money, pct, tone) -> list[tuple]:
+    hi, lo = num(info.get("fiftyTwoWeekHigh")), num(info.get("fiftyTwoWeekLow"))
+    ma50, ma200 = num(info.get("fiftyDayAverage")), num(info.get("twoHundredDayAverage"))
+    return [
+        ("ช่วงราคา 52 สัปดาห์", f"${lo:,.2f} – ${hi:,.2f}" if hi and lo else None, "", None),
+        ("ห่างจากจุดสูงสุด 52 สัปดาห์", pct(price / hi - 1, True) if hi and price else None,
+         tone(price / hi - 1) if hi and price else "", None),
+        ("เทียบเส้นค่าเฉลี่ย 50 วัน", pct(price / ma50 - 1, True) if ma50 and price else None,
+         tone(price / ma50 - 1) if ma50 and price else "", f"MA50 = ${ma50:,.2f}" if ma50 else None),
+        ("เทียบเส้นค่าเฉลี่ย 200 วัน", pct(price / ma200 - 1, True) if ma200 and price else None,
+         tone(price / ma200 - 1) if ma200 and price else "", f"MA200 = ${ma200:,.2f}" if ma200 else None),
+    ]

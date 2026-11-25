@@ -16,7 +16,7 @@ Notes for Claude sessions working on this repo. The user-facing Thai manual is `
 ## Files
 | File | Purpose |
 |---|---|
-| `app.py` | All UI. Tabs: Data (label "📈 Data"; ticker selectbox `chart_ticker` at top; then a second `with tab_chart:` appends company info [profile TH/EN + earnings in expanders] → Buffett checklist/DCF/annual financials → news last), Watchlist (add/select/reorder ⏫↑↓/delete via callbacks in horizontal containers; no sidebar — `pick()` callback sets `selected` + `chart_ticker`), เปรียบเทียบ, Screener (market-wide Buffett Indicator appended at the bottom via a second `with tab_screener:`), แจ้งเตือน, พอร์ต, คู่มือ |
+| `app.py` | All UI. Tabs: Data (label "📈 Data"; ticker selectbox `chart_ticker` at top; then a second `with tab_chart:` appends company info [key stats grid from `buffett.key_stats()` → `ui.key_stats()` in sub-tabs per section; profile TH/EN + earnings in expanders] → Buffett checklist/DCF/annual financials → news last), Watchlist (add/select/reorder ⏫↑↓/delete via callbacks in horizontal containers; no sidebar — `pick()` callback sets `selected` + `chart_ticker`), เปรียบเทียบ, Screener (market-wide Buffett Indicator appended at the bottom via a second `with tab_screener:`), แจ้งเตือน, พอร์ต, คู่มือ |
 | `buffett.py` | Fundamentals fetch, Buffett checklist, Owner Earnings (OCF − SBC − maintenance capex, Greenwald), DCF, implied growth, financials detection, P/B, share count, Buffett Indicator |
 | `screener.py` | Screens: main = S&P 500 (Wikipedia) + Nasdaq-100, r1000 = Top 1000 via `yf.screen` · Nasdaq-100 from Wikipedia list page → api.nasdaq.com |
 | `company.py` | Google Translate (free gtx endpoint; optional `GOOGLE_TRANSLATE_API_KEY`), news (Yahoo → Google News RSS), earnings |

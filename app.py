@@ -26,7 +26,7 @@ import portfolio as pf  # noqa: E402
 import ui  # noqa: E402
 from buffett import (BASIS_OE, buffett_checks, build_buffett_indicator, current_price, dcf_options, default_growth,
                      explain, implied_growth,
-                     fetch_fundamentals, fmt_money, is_company, price_to_book, share_count,
+                     fetch_fundamentals, fmt_money, is_company, key_stats, price_to_book, share_count,
                      valuation_rows)
 
 WATCHLIST_FILE = Path(__file__).with_name("watchlist.json")
@@ -775,6 +775,24 @@ with tab_chart:
     k3.metric("Beta", f"{beta:.2f}" if beta else "—", help="ความผันผวนเทียบตลาด: 1 = เท่าตลาด, >1 = ผันผวนกว่า")
     if cinfo.get("website"):
         st.markdown(f"🌐 [{cinfo['website']}]({cinfo['website']})")
+
+    # ---- ตัวเลขการเงินสำคัญ ----
+    st.markdown("#### 📊 ตัวเลขการเงินสำคัญ")
+    try:
+        ks = [s for s in key_stats(get_fundamentals(c_ticker)) if ui.key_stats([s])]
+    except Exception as e:  # noqa: BLE001
+        ks = []
+        st.caption(f"คำนวณตัวเลขไม่สำเร็จ ({type(e).__name__})")
+    if ks:
+        # แบ่งเป็นแท็บย่อยตามหมวด กันหน้ายาวบนมือถือ
+        for ks_tab, sec in zip(st.tabs([s[0] for s in ks]), ks):
+            ks_tab.markdown(ui.key_stats([sec], titles=False), unsafe_allow_html=True)
+        st.caption("ข้อมูลจาก Yahoo Finance · สีเขียว/แดง = ดี/ควรระวังเบื้องต้น · "
+                   "ค่าที่ Yahoo ไม่มีจะถูกซ่อน · อัตราส่วนควรเทียบกับบริษัทในอุตสาหกรรมเดียวกัน")
+        with st.expander("📘 วิธีอ่านตัวเลขการเงิน"):
+            st.markdown(guides.KEY_STATS)
+    else:
+        st.caption("Yahoo Finance ไม่มีตัวเลขการเงินของหุ้นตัวนี้")
 
     # ---- Profile: ซ่อนไว้ทั้งไทยและอังกฤษ ----
     summary = (cinfo.get("longBusinessSummary") or "").strip()
